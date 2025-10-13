@@ -1,18 +1,37 @@
 // Queue to limit concurrent thumbnail generation
+// class ThumbnailQueue {
+//   constructor(maxConcurrent = 2) {
+//     this.maxConcurrent = maxConcurrent;
+//     this.running = 0;
+//     this.queue = [];
+//   }
+
+//   async add(fn) {
+//     while (this.running >= this.maxConcurrent) {
+//       await new Promise(resolve => {
+//         this.queue.push(resolve);
+//       });
+//     }
+
+//     this.running++;
+//     try {
+//       return await fn();
+//     } finally {
+//       this.running--;
+//       const resolve = this.queue.shift();
+//       if (resolve) resolve();
+//     }
+//   }
+// }
+
+// No concurrency
 class ThumbnailQueue {
-  constructor(maxConcurrent = 2) {
-    this.maxConcurrent = maxConcurrent;
+  constructor() {
     this.running = 0;
     this.queue = [];
   }
 
   async add(fn) {
-    while (this.running >= this.maxConcurrent) {
-      await new Promise(resolve => {
-        this.queue.push(resolve);
-      });
-    }
-
     this.running++;
     try {
       return await fn();
@@ -24,7 +43,7 @@ class ThumbnailQueue {
   }
 }
 
-const thumbnailQueue = new ThumbnailQueue(2); // Max 2 concurrent generations
+const thumbnailQueue = new ThumbnailQueue(); // Max 2 concurrent generations
 
 /**
  * Generate a thumbnail from a video at a specific timestamp

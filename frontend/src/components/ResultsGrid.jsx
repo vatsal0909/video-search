@@ -1,6 +1,5 @@
-import React from 'react';
 import VideoClipCard from './VideoClipCard';
-import { FileVideo, AlertCircle } from 'lucide-react';
+import { FileVideo } from 'lucide-react';
 
 const ResultsGrid = ({ clips, total, query, onClipClick }) => {
   if (!clips || clips.length === 0) {

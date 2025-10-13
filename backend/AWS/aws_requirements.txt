@@ -2,8 +2,7 @@ fastapi
 uvicorn
 boto3
 opensearch-py
-strands-agents
+requests-aws4auth
 pydantic
 python-multipart
 python-dotenv
-requests

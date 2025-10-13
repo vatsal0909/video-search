@@ -57,11 +57,10 @@ function App() {
             Powered by TwelveLabs & AWS
           </div>
           <h2 className="text-4xl md:text-5xl font-bold text-gray-900 mb-4">
-            Search Videos with AI
+            Search Videos
           </h2>
           <p className="text-lg text-gray-600 max-w-2xl mx-auto">
-            Find exact moments in your videos using natural language. 
-            Our AI understands context and delivers precise results.
+            Find exact moments in your videos using natural language.
           </p>
         </div>
 
@@ -98,7 +97,7 @@ function App() {
 
         {/* Empty State */}
         {!isLoading && !query && clips.length === 0 && (
-          <div className="text-center py-16">
+          <div className="text-center">
             <div className="max-w-md mx-auto">
               <div className="w-24 h-24 bg-gradient-to-br from-primary-100 to-purple-100 rounded-full flex items-center justify-center mx-auto mb-6">
                 <Sparkles size={48} className="text-primary-600" />
