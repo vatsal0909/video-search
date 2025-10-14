@@ -26,7 +26,7 @@ const SearchBar = ({ onSearch, isLoading }) => {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search videos, actions, or objects..."
-          className="w-full py-4 pl-14 pr-24 text-lg rounded-2xl border border-blue-200 focus:outline-none focus:ring-4 focus:ring-blue-200 focus:border-blue-400 shadow-sm hover:shadow-md transition-all"
+          className="w-full py-4 pl-14 pr-16 text-lg rounded-2xl border border-blue-200 focus:outline-none focus:ring-4 focus:ring-blue-200 focus:border-blue-400 shadow-sm hover:shadow-md transition-all"
           disabled={isLoading}
         />
         
@@ -34,7 +34,7 @@ const SearchBar = ({ onSearch, isLoading }) => {
           <button
             type="button"
             onClick={clear_query}
-            className="absolute right-20 top-1/2 -translate-y-1/2 p-2 text-gray-400 hover:text-gray-600 transition-colors"
+            className="absolute right-6 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
           >
             <X size={20} />
           </button>

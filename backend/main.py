@@ -4,14 +4,18 @@ from pydantic import BaseModel
 from typing import List, Optional
 import os
 import uuid
-from agent import VideoSearchAgent
+# from agent import VideoSearchAgent
 from clients import (
     BedrockClient,
+    # TwelveLabsClient,
+    # OpenSearchClient,
     BedrockTwelveLabsClient,
-    TwelveLabsClient,
-    OpenSearchClient
+    BedrockOpensearchClient
 )
 from video_routes import router as video_router
+from s3_utils import add_presigned_urls_to_results
+
+import time
 
 app = FastAPI(title="Video Search API")
 
@@ -26,9 +30,13 @@ app.add_middleware(
 
 # Initialize clients
 bedrock_client = BedrockClient()
-twelvelabs_client = BedrockTwelveLabsClient() if os.getenv('Bedrock_TL') == "True" else TwelveLabsClient() 
-opensearch_client = OpenSearchClient()
-video_agent = VideoSearchAgent()
+if os.getenv('Bedrock_TL') == "True":
+    twelvelabs_client = BedrockTwelveLabsClient()
+    opensearch_client = BedrockOpensearchClient()
+# else:
+#     twelvelabs_client = TwelveLabsClient()
+#     opensearch_client = OpenSearchClient()
+# video_agent = VideoSearchAgent()
 
 # Include video routes (will use the opensearch_client directly)
 app.include_router(video_router)
@@ -55,6 +63,7 @@ class AnswerResponse(BaseModel):
 class VideoClip(BaseModel):
     video_id: str
     video_path: str
+    presigned_url: Optional[str] = None
     timestamp_start: float
     timestamp_end: float
     clip_text: str
@@ -70,6 +79,7 @@ processing_jobs = {}
 
 def process_video_embeddings(video_id: str, video_path: str):
     """Background task to process video embeddings"""
+    start_time = time.time()
     try:
         processing_jobs[video_id] = {"status": "processing", "progress": 0}
         # # Split the URL to encode only the path part
@@ -107,12 +117,17 @@ def process_video_embeddings(video_id: str, video_path: str):
                 video_path=video_path,
                 timestamp_start=emb['start_offset_sec'],
                 timestamp_end=emb['end_offset_sec'],
+                embedding_scope=emb['embedding_scope'],
                 embedding=emb['embedding'],
                 clip_text=f"Clip at {emb['start_offset_sec']:.1f}s"
             )
             indexed += 1
             processing_jobs[video_id]["progress"] = int((indexed / len(embeddings)) * 100)
         
+        print(f"FINISHED: Indexed {indexed} video embeddings")
+        end_time = time.time()
+        print(f"Time taken to index video embeddings: {end_time - start_time} seconds")
+
         processing_jobs[video_id] = {
             "status": "completed",
             "clips_indexed": indexed,
@@ -159,45 +174,64 @@ async def get_video_status(video_id: str):
     
     return processing_jobs[video_id]
 
-@app.post("/search", response_model=SearchResponse)
-async def search_videos(request: SearchRequest):
+@app.post("/hybrid-search", response_model=ClipsResponse)
+async def hybrid_search(request: SearchRequest):
     """Search for video clips using TwelveLabs embeddings"""
     try:
         # Generate query embedding via TwelveLabs
         query_embedding = twelvelabs_client.generate_text_embedding(request.query)
 
-        print(query_embedding)
+        print("Query embedding received")
         
         if not query_embedding:
-            return SearchResponse(results=[], total=0)
+            return ClipsResponse(clips=[], total=0, query=request.query)
         
-        # Search in local OpenSearch
-        results = opensearch_client.search_similar_clips(
+        # Search in local OpenSearch using hybrid search
+        results = opensearch_client.hybrid_search(
             query_embedding,
+            request.query,
             top_k=request.top_k
         )
         
-        return SearchResponse(
-            results=results,
-            total=len(results)
+        # Add presigned URLs for private S3 buckets
+        results = add_presigned_urls_to_results(results, expiration=3600)
+        
+        # Convert results to VideoClip models
+        clips = [
+            VideoClip(
+                video_id=result['video_id'],
+                video_path=result['video_path'],
+                presigned_url=result.get('presigned_url'),
+                timestamp_start=result['timestamp_start'],
+                timestamp_end=result['timestamp_end'],
+                clip_text=result.get('clip_text', ''),
+                score=result.get('score', 0.0)
+            )
+            for result in results
+        ]
+
+        return ClipsResponse(
+            clips=clips,
+            total=len(clips),
+            query=request.query
         )
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/ask", response_model=AnswerResponse)
-async def ask_question(request: QuestionRequest):
-    """Ask a question using Strands agent with TwelveLabs + Bedrock"""
-    try:
-        result = video_agent.answer_question(request.question)
+# @app.post("/ask", response_model=AnswerResponse)
+# async def ask_question(request: QuestionRequest):
+#     """Ask a question using Strands agent with TwelveLabs + Bedrock"""
+#     try:
+#         result = video_agent.answer_question(request.question)
         
-        return AnswerResponse(
-            answer=result['answer'],
-            clips=result['clips']
-        )
+#         return AnswerResponse(
+#             answer=result['answer'],
+#             clips=result['clips']
+#         )
     
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/search-clips", response_model=ClipsResponse)
 async def search_clips(request: SearchRequest):
@@ -215,11 +249,15 @@ async def search_clips(request: SearchRequest):
             top_k=request.top_k
         )
         
+        # Add presigned URLs for private S3 buckets
+        results = add_presigned_urls_to_results(results, expiration=3600)
+        
         # Convert results to VideoClip models
         clips = [
             VideoClip(
                 video_id=result['video_id'],
                 video_path=result['video_path'],
+                presigned_url=result.get('presigned_url'),
                 timestamp_start=result['timestamp_start'],
                 timestamp_end=result['timestamp_end'],
                 clip_text=result.get('clip_text', ''),

@@ -11,7 +11,7 @@ const api = axios.create({
 
 export const searchClips = async (query, topK = 10) => {
   try {
-    const response = await api.post('/search-clips', {
+    const response = await api.post('/hybrid-search', {
       query,
       top_k: topK,
     });

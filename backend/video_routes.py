@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
+from s3_utils import generate_presigned_url
 
 router = APIRouter(prefix="/videos", tags=["videos"])
 
@@ -36,9 +37,12 @@ async def list_all_videos():
         # Transform to response format
         video_list = []
         for video in videos:
+            # Generate presigned URL for private S3 bucket access
+            presigned_url = generate_presigned_url(video['video_path'], expiration=3600)
+            
             video_list.append(VideoMetadata(
                 video_id=video['video_id'],
-                video_path=video['video_path'],
+                video_path=presigned_url if presigned_url else video['video_path'],
                 title=video.get('title') or f"Video {video['video_id'][:8]}",
                 thumbnail_url=video.get('thumbnail_url'),
                 duration=video.get('duration'),
@@ -68,9 +72,12 @@ async def get_video_details(video_id: str):
         if not video:
             raise HTTPException(status_code=404, detail="Video not found")
         
+        # Generate presigned URL for private S3 bucket access
+        presigned_url = generate_presigned_url(video['video_path'], expiration=3600)
+        
         return VideoMetadata(
             video_id=video['video_id'],
-            video_path=video['video_path'],
+            video_path=presigned_url if presigned_url else video['video_path'],
             title=video.get('title'),
             thumbnail_url=video.get('thumbnail_url'),
             duration=video.get('duration'),

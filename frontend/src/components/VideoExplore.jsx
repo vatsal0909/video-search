@@ -87,10 +87,10 @@ const VideoExplore = () => {
       const transformedVideos = data.videos.map(video => ({
         id: video.video_id,
         title: video.title || `Video ${video.video_id.substring(0, 8)}`,
-        videoUrl: video.video_path,  // Use video_path for thumbnail generation
+        videoUrl: video.video_path,  // Use presigned URL for video access
         duration: formatDuration(video.duration),
         uploadDate: video.upload_date || 'Unknown',
-        videoPath: video.video_path,
+        videoPath: video.video_path,  // Presigned URL from backend
         clipsCount: video.clips_count
       }));
       

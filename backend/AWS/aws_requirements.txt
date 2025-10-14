@@ -1,8 +1,0 @@
-fastapi
-uvicorn
-boto3
-opensearch-py
-requests-aws4auth
-pydantic
-python-multipart
-python-dotenv

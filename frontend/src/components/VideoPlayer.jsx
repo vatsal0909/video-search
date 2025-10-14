@@ -7,10 +7,42 @@ const VideoPlayer = ({ clip, onClose }) => {
   const videoRef = useRef(null);
 
   useEffect(() => {
-    if (videoRef.current && clip) {
-      videoRef.current.currentTime = clip.timestamp_start;
-      videoRef.current.play();
+    const videoElement = videoRef.current;
+
+    if (!videoElement || !clip) {
+      return;
     }
+
+    videoElement.currentTime = clip.timestamp_start;
+    const playPromise = videoElement.play();
+
+    let autoPaused = false;
+
+    const handleTimeUpdate = () => {
+      if (!autoPaused && videoElement.currentTime >= clip.timestamp_end) {
+        autoPaused = true;
+        videoElement.pause();
+        videoElement.removeEventListener('timeupdate', handleTimeUpdate);
+      }
+    };
+
+    const handlePlay = () => {
+      if (videoElement.currentTime >= clip.timestamp_end && autoPaused) {
+        // User resumed playback intentionally; keep playing
+        videoElement.removeEventListener('timeupdate', handleTimeUpdate);
+      }
+    };
+
+    videoElement.addEventListener('timeupdate', handleTimeUpdate);
+    videoElement.addEventListener('play', handlePlay);
+
+    return () => {
+      videoElement.removeEventListener('timeupdate', handleTimeUpdate);
+      videoElement.removeEventListener('play', handlePlay);
+      if (playPromise !== undefined) {
+        playPromise.catch(() => {});
+      }
+    };
   }, [clip]);
 
   if (!clip) return null;
@@ -46,7 +78,7 @@ const VideoPlayer = ({ clip, onClose }) => {
           <div className="w-[55%] bg-black flex items-center justify-center">
             <video
               ref={videoRef}
-              src={`${clip.video_path}#t=${clip.timestamp_start},${clip.timestamp_end}`}
+              src={clip.presigned_url || clip.video_path}
               controls
               className="w-full h-full"
               controlsList="nodownload"

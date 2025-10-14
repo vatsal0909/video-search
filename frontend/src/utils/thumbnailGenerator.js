@@ -100,15 +100,6 @@ export const generate_thumbnail = (videoUrl, timestamp) => {
       video.remove();
     });
     
-    // Increased timeout for slower connections
-    setTimeout(() => {
-      if (!hasResolved) {
-        hasResolved = true;
-        reject(new Error('Thumbnail generation timeout'));
-        video.remove();
-      }
-    }, 30000); // Increased to 30 seconds
-    
     video.src = videoUrl;
   });
 };
