@@ -11,6 +11,7 @@ separate fields for each modality based on Marengo model output:
 
 import json
 import os
+import time
 from typing import Dict, List, Optional
 from opensearchpy import OpenSearch, RequestsHttpConnection, AWSV4SignerAuth
 from opensearchpy.exceptions import NotFoundError
@@ -36,7 +37,7 @@ class OpenSearchConsolidator:
         """Initialize OpenSearch client with AWS credentials from .env"""
         self.opensearch_client = self._get_opensearch_client()
         self.source_index = "video_clips"
-        self.target_index = "updated_video_clips"
+        self.target_index = "updated_video_clips_cosine_sim"
 
 
     def _get_opensearch_client(self):
@@ -75,7 +76,9 @@ class OpenSearchConsolidator:
             use_ssl=True,
             verify_certs=True,
             connection_class=RequestsHttpConnection,
-            pool_maxsize=20
+            pool_maxsize=20,
+            timeout=120,
+            connection_timeout=30
         )
 
         # Test connection
@@ -92,8 +95,24 @@ class OpenSearchConsolidator:
     def create_consolidated_index(self):
         """Create new consolidated index with separate embedding fields for Marengo modalities"""
         if self.opensearch_client.indices.exists(index=self.target_index):
-            logger.warning(f"Index {self.target_index} already exists. Deleting...")
-            self.opensearch_client.indices.delete(index=self.target_index)
+            logger.warning(f"Index {self.target_index} already exists. Attempting to delete...")
+            max_retries = 5
+            for attempt in range(max_retries):
+                try:
+                    self.opensearch_client.indices.delete(index=self.target_index)
+                    logger.info(f"✓ Successfully deleted existing index")
+                    break
+                except Exception as e:
+                    if 'snapshot_in_progress' in str(e):
+                        if attempt < max_retries - 1:
+                            wait_time = 5 * (2 ** attempt)  # 5s, 10s, 20s, 40s, 80s
+                            logger.warning(f"Snapshot in progress on index. Retrying in {wait_time}s (attempt {attempt + 1}/{max_retries})...")
+                            time.sleep(wait_time)
+                        else:
+                            logger.error(f"Could not delete index after {max_retries} attempts due to ongoing snapshot")
+                            raise
+                    else:
+                        raise
 
         # New mapping with separate embedding fields for Marengo scopes
         index_body = {
@@ -119,11 +138,11 @@ class OpenSearchConsolidator:
                         "dimension": 1024,
                         "method": {
                             "name": "hnsw",
-                            "space_type": "l2",
+                            "space_type": "cosinesimil",
                             "engine": "lucene",
                             "parameters": {
-                                "ef_construction": 128,
-                                "m": 16
+                                "ef_construction": 256,
+                                "m": 32
                             }
                         }
                     },
@@ -132,11 +151,11 @@ class OpenSearchConsolidator:
                         "dimension": 1024,
                         "method": {
                             "name": "hnsw",
-                            "space_type": "l2",
+                            "space_type": "cosinesimil",
                             "engine": "lucene",
                             "parameters": {
-                                "ef_construction": 128,
-                                "m": 16
+                                "ef_construction": 256,
+                                "m": 32
                             }
                         }
                     },
@@ -145,11 +164,11 @@ class OpenSearchConsolidator:
                         "dimension": 1024,
                         "method": {
                             "name": "hnsw",
-                            "space_type": "l2",
+                            "space_type": "cosinesimil",
                             "engine": "lucene",
                             "parameters": {
-                                "ef_construction": 128,
-                                "m": 16
+                                "ef_construction": 256,
+                                "m": 32
                             }
                         }
                     }
@@ -275,7 +294,33 @@ class OpenSearchConsolidator:
             raise
 
 
-    def index_consolidated_documents(self, consolidated_docs: Dict[str, Dict], batch_size: int = 100):
+    def _bulk_index_with_retry(self, bulk_body: List, max_retries: int = 3):
+        """
+        Perform bulk indexing with exponential backoff retry logic
+        
+        Args:
+            bulk_body: List of bulk operation documents
+            max_retries: Maximum number of retry attempts
+            
+        Returns:
+            Response from bulk operation
+        """
+        from opensearchpy.exceptions import ConnectionTimeout
+        
+        for attempt in range(max_retries):
+            try:
+                response = self.opensearch_client.bulk(body=bulk_body)
+                return response
+            except (TimeoutError, ConnectionError, ConnectionTimeout) as e:
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                    logger.warning(f"Bulk operation timeout (attempt {attempt + 1}/{max_retries}). Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    logger.error(f"Bulk operation failed after {max_retries} attempts")
+                    raise
+
+    def index_consolidated_documents(self, consolidated_docs: Dict[str, Dict], batch_size: int = 25):
         """
         Index consolidated documents into new index
 
@@ -306,7 +351,7 @@ class OpenSearchConsolidator:
 
                 # Bulk index when batch size reached
                 if len(bulk_body) >= batch_size * 2:  # *2 because each doc has metadata + body
-                    response = self.opensearch_client.bulk(body=bulk_body)
+                    response = self._bulk_index_with_retry(bulk_body)
 
                     if response.get('errors'):
                         logger.warning(f"Some documents failed to index")
@@ -318,7 +363,7 @@ class OpenSearchConsolidator:
 
             # Index remaining documents
             if bulk_body:
-                response = self.opensearch_client.bulk(body=bulk_body)
+                response = self._bulk_index_with_retry(bulk_body)
 
                 if response.get('errors'):
                     logger.warning(f"Some documents failed to index")
