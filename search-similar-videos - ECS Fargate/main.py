@@ -32,7 +32,7 @@ class SearchRequest(BaseModel):
     query_text: str
     video_id: Optional[str] = None
     top_k: int = 10
-    search_type: str = "hybrid"  # hybrid, vector, text, multimodal
+    search_type: str = "hybrid"  # hybrid, vector, text
     confidence_threshold: Optional[float] = 0.0  # NEW: Filter by confidence (0-1)
 
 
@@ -74,12 +74,6 @@ SEARCH_WEIGHTS = {
     "vector": {
         "emb_vis_text": 1.0,
         "emb_vis_image": 1.0,
-        "emb_audio": 1.0
-    },
-    # Multimodal: Text-focused for keyword queries
-    "multimodal": {
-        "emb_vis_text": 2.0,
-        "emb_vis_image": 1.5,
         "emb_audio": 1.0
     }
 }
@@ -148,8 +142,6 @@ async def search_videos(request: SearchRequest):
             results = vector_search(opensearch_client, query_embedding, video_id, top_k)
         elif search_type == "text":
             results = text_search(opensearch_client, query_text, video_id, top_k)
-        elif search_type == "multimodal":
-            results = multimodal_search(opensearch_client, query_embedding, video_id, top_k)
         else:
             raise HTTPException(
                 status_code=400,
@@ -224,8 +216,6 @@ async def search_in_video(request: SearchRequest, video_id: str):
             results = vector_search(opensearch_client, query_embedding, video_id, top_k)
         elif search_type == "text":
             results = text_search(opensearch_client, query_text, video_id, top_k)
-        elif search_type == "multimodal":
-            results = multimodal_search(opensearch_client, query_embedding, video_id, top_k)
         else:
             results = hybrid_search(opensearch_client, query_embedding, query_text, video_id, top_k)
 
@@ -339,11 +329,6 @@ async def get_index_stats():
                     'description': 'Keyword-only BM25',
                     'weights': None,
                     'accuracy': 'LOW'
-                },
-                'multimodal': {
-                    'description': 'Text-focused multi-modality',
-                    'weights': SEARCH_WEIGHTS['multimodal'],
-                    'accuracy': 'HIGH'
                 }
             },
             'notes': 'cosinesimil is CORRECT - Best for normalized embeddings like Marengo'
@@ -377,6 +362,53 @@ def get_opensearch_client():
         connection_class=RequestsHttpConnection,
         pool_maxsize=20
     )
+
+
+def create_search_pipeline(client):
+    """Create search pipeline with min-max normalization for score normalization"""
+    pipeline_name = "updated-video-clips-cosine-sim-norm-pipeline"
+    
+    # Weights must match the query order: [emb_vis_text, emb_vis_image, emb_audio, text_match]
+    # Normalized to sum to 1.0: [1.8, 1.2, 0.8, 1.5] -> [0.36, 0.24, 0.16, 0.30]
+    weights = [0.25, 0.30, 0.25, 0.20]
+    
+    pipeline_body = {
+        "description": "Post-processing pipeline for hybrid/vector search with min-max normalization",
+        "phase_results_processors": [
+            {
+                "normalization-processor": {
+                    "normalization": {
+                        "technique": "min_max"
+                    },
+                    "combination": {
+                        "technique": "arithmetic_mean",
+                        "parameters": {
+                            "weights": weights
+                        }
+                    }
+                }
+            }
+        ]
+    }
+    
+    try:
+        # Always delete and recreate to ensure fresh pipeline
+        try:
+            client.search_pipeline.delete(id=pipeline_name)
+            logger.info(f"Deleted existing pipeline '{pipeline_name}'")
+        except:
+            pass
+        
+        client.search_pipeline.put(
+            id=pipeline_name,
+            body=pipeline_body
+        )
+        logger.info(f"✓ Created search pipeline '{pipeline_name}' with min-max normalization")
+        return pipeline_name
+    
+    except Exception as e:
+        logger.warning(f"✗ Pipeline creation error: {e}")
+        return None
 
 
 def generate_text_embedding(bedrock_runtime, text: str) -> List[float]:
@@ -419,20 +451,14 @@ def hybrid_search(client, query_embedding: List[float], query_text: str,
     4. Confidence scoring (0-1 range)
     5. Fetches 2x candidates, reranks by accuracy
     """
-    must_clauses = []
-    if video_id:
-        must_clauses.append({"term": {"video_id": video_id}})
-
-    weights = SEARCH_WEIGHTS["hybrid"]
-
-    # Corrected weights for editorial/media content
-    should_clauses = [
+    # Build hybrid query with explicit queries array for 1:1 weight mapping
+    # For OpenSearch 3.1, use knn queries instead of neural for vector search
+    queries = [
         {
             "knn": {
                 "emb_vis_text": {
                     "vector": query_embedding,
-                    "k": top_k,  # Fetch more candidates
-                    "boost": weights["emb_vis_text"]
+                    "k": top_k * 2
                 }
             }
         },
@@ -440,8 +466,7 @@ def hybrid_search(client, query_embedding: List[float], query_text: str,
             "knn": {
                 "emb_vis_image": {
                     "vector": query_embedding,
-                    "k": top_k,
-                    "boost": weights["emb_vis_image"]
+                    "k": top_k * 2
                 }
             }
         },
@@ -449,8 +474,7 @@ def hybrid_search(client, query_embedding: List[float], query_text: str,
             "knn": {
                 "emb_audio": {
                     "vector": query_embedding,
-                    "k": top_k,
-                    "boost": weights["emb_audio"]
+                    "k": top_k * 2
                 }
             }
         },
@@ -458,45 +482,87 @@ def hybrid_search(client, query_embedding: List[float], query_text: str,
             "match": {
                 "clip_text": {
                     "query": query_text,
-                    "fuzziness": "AUTO",
-                    "boost": weights["text_match"]
+                    "fuzziness": "AUTO"
                 }
             }
         }
     ]
 
-    search_body = {
-        "size": top_k,  # Fetch more for deduplication + reranking
-        "query": {
-            "bool": {
-                "must": must_clauses if must_clauses else [{"match_all": {}}],
-                "should": should_clauses,
-                "minimum_should_match": 2  # ✓ HIGH ACCURACY: Require 2+ modalities
-            }
-        },
-        "_source": [
-            "clip_id", "video_id", "timestamp_start", "timestamp_end", "clip_text", "video_path"
-        ]
-    }
+    # Add video_id filter if provided
+    if video_id:
+        search_body = {
+            "size": top_k * 2,
+            "query": {
+                "bool": {
+                    "must": [{"term": {"video_id": video_id}}],
+                    "should": [{"hybrid": {"queries": queries}}],
+                    "minimum_should_match": 1
+                }
+            },
+            "_source": [
+                "clip_id", "video_id", "timestamp_start", "timestamp_end", "clip_text", "video_path"
+            ]
+        }
+    else:
+        search_body = {
+            "size": top_k * 2,
+            "query": {
+                "hybrid": {
+                    "queries": queries
+                }
+            },
+            "_source": [
+                "clip_id", "video_id", "timestamp_start", "timestamp_end", "clip_text", "video_path"
+            ]
+        }
 
     try:
-        response = client.search(index=INDEX_NAME, body=search_body)
+        # Create and use search pipeline for min-max normalization
+        pipeline_name = create_search_pipeline(client)
+        
+        search_params = {"index": INDEX_NAME, "body": search_body}
+        if pipeline_name:
+            search_params["search_pipeline"] = pipeline_name
+        
+        response = client.search(**search_params)
         results = parse_search_results(response)
 
-        # ✓ RRF Normalization: Normalize k-NN + BM25 scores to 0-1 range
-        results = normalize_scores_rrf(results, RRF_K)
+        # Normalize scores to 0-1 range (fallback if pipeline didn't work)
+        if results:
+            max_score = max([r.get('score', 0) for r in results], default=1.0)
+            min_score = min([r.get('score', 0) for r in results], default=0.0)
+            
+            logger.info(f"Raw scores - min: {min_score:.4f}, max: {max_score:.4f}, count: {len(results)}")
+            
+            if max_score > 1.0:  # If scores exceed 1.0, pipeline didn't normalize
+                logger.warning(f"Pipeline normalization may have failed (max_score: {max_score}). Applying fallback min-max normalization.")
+                score_range = max_score - min_score
+                if score_range > 0:
+                    for result in results:
+                        # Min-max normalization: (score - min) / (max - min)
+                        result['score'] = (result.get('score', 0) - min_score) / score_range
+                else:
+                    # All scores are the same, set to 1.0
+                    for result in results:
+                        result['score'] = 1.0
+            else:
+                logger.info(f"Pipeline normalization successful (scores already in 0-1 range)")
+        
+        # Convert normalized scores (0-1) to percentage
+        for result in results:
+            result['confidence'] = round(result.get('score', 0) * 100, 2)
 
-        # Deduplicate by clip_id, keep highest confidence
+        # Deduplicate by clip_id, keep highest score
         deduped = {}
         for result in results:
             clip_id = result['clip_id']
-            if clip_id not in deduped or result.get('confidence', 0) > deduped[clip_id].get('confidence', 0):
+            if clip_id not in deduped or result.get('score', 0) > deduped[clip_id].get('score', 0):
                 deduped[clip_id] = result
 
         results = list(deduped.values())
-        results = sorted(results, key=lambda x: x.get('confidence', 0), reverse=True)[:top_k]
+        results = sorted(results, key=lambda x: x.get('score', 0), reverse=True)[:top_k]
 
-        logger.info(f"Hybrid: {len(response['hits']['hits'])} candidates → {len(results)} final (RRF normalized)")
+        logger.info(f"Hybrid: {len(response['hits']['hits'])} candidates → {len(results)} final (normalized, scores: {[r['confidence'] for r in results[:3]]}%)")
 
         return results
 
@@ -556,17 +622,44 @@ def vector_search(client, query_embedding: List[float], video_id: Optional[str],
     }
 
     try:
-        response = client.search(index=INDEX_NAME, body=search_body)
+        # Create and use search pipeline for min-max normalization
+        pipeline_name = create_search_pipeline(client)
+        
+        search_params = {"index": INDEX_NAME, "body": search_body}
+        if pipeline_name:
+            search_params["search_pipeline"] = pipeline_name
+        
+        response = client.search(**search_params)
         results = parse_search_results(response)
-        results = normalize_scores_rrf(results, RRF_K)
+
+        # Normalize scores to 0-1 range (fallback if pipeline didn't work)
+        if results:
+            max_score = max([r.get('score', 0) for r in results], default=1.0)
+            min_score = min([r.get('score', 0) for r in results], default=0.0)
+            
+            if max_score > 1.0:  # If scores exceed 1.0, pipeline didn't normalize
+                logger.warning(f"Pipeline normalization may have failed (max_score: {max_score}). Applying fallback min-max normalization.")
+                score_range = max_score - min_score
+                if score_range > 0:
+                    for result in results:
+                        # Min-max normalization: (score - min) / (max - min)
+                        result['score'] = (result.get('score', 0) - min_score) / score_range
+                else:
+                    # All scores are the same, set to 1.0
+                    for result in results:
+                        result['score'] = 1.0
+        
+        # Convert normalized scores (0-1) to percentage
+        for result in results:
+            result['confidence'] = round(result.get('score', 0) * 100, 2)
 
         deduped = {}
         for result in results:
             clip_id = result['clip_id']
-            if clip_id not in deduped or result.get('confidence', 0) > deduped[clip_id].get('confidence', 0):
+            if clip_id not in deduped or result.get('score', 0) > deduped[clip_id].get('score', 0):
                 deduped[clip_id] = result
 
-        results = sorted(deduped.values(), key=lambda x: x.get('confidence', 0), reverse=True)[:top_k]
+        results = sorted(deduped.values(), key=lambda x: x.get('score', 0), reverse=True)[:top_k]
         return results
 
     except Exception as e:
@@ -593,78 +686,24 @@ def text_search(client, query_text: str, video_id: Optional[str], top_k: int) ->
         response = client.search(index=INDEX_NAME, body=search_body)
         results = parse_search_results(response)
 
-        # Normalize BM25 scores
-        for result in results:
-            result['confidence'] = min(result.get('score', 0) / 10.0, 1.0)  # BM25 can be high
+        # Normalize BM25 scores to percentage
+        if results:
+            max_score = max([r.get('score', 0) for r in results], default=1.0)
+            if max_score == 0:
+                max_score = 1.0
+            for result in results:
+                score = result.get('score', 0)
+                result['confidence'] = round((score / max_score) * 100, 2)
 
-        return results[:top_k]
+        results = sorted(results, key=lambda x: x.get('score', 0), reverse=True)[:top_k]
+        return results
 
     except Exception as e:
         logger.error(f"Text search error: {e}", exc_info=True)
         return []
 
 
-def multimodal_search(client, query_embedding: List[float], video_id: Optional[str], top_k: int) -> List[Dict]:
-    """Multimodal search with text-focused weights"""
-    must_clauses = []
-    if video_id:
-        must_clauses.append({"term": {"video_id": video_id}})
 
-    weights = SEARCH_WEIGHTS["multimodal"]
-
-    should_clauses = [
-        {"knn": {"emb_vis_text": {"vector": query_embedding, "k": top_k * 2, "boost": weights["emb_vis_text"]}}},
-        {"knn": {"emb_vis_image": {"vector": query_embedding, "k": top_k * 2, "boost": weights["emb_vis_image"]}}},
-        {"knn": {"emb_audio": {"vector": query_embedding, "k": top_k * 2, "boost": weights["emb_audio"]}}}
-    ]
-
-    search_body = {
-        "size": top_k * 2,
-        "query": {
-            "bool": {
-                "must": must_clauses if must_clauses else [{"match_all": {}}],
-                "should": should_clauses,
-                "minimum_should_match": 2
-            }
-        },
-        "_source": ["clip_id", "video_id", "timestamp_start", "timestamp_end", "clip_text", "video_path"]
-    }
-
-    try:
-        response = client.search(index=INDEX_NAME, body=search_body)
-        results = parse_search_results(response)
-        results = normalize_scores_rrf(results, RRF_K)
-
-        deduped = {}
-        for result in results:
-            clip_id = result['clip_id']
-            if clip_id not in deduped or result.get('confidence', 0) > deduped[clip_id].get('confidence', 0):
-                deduped[clip_id] = result
-
-        results = sorted(deduped.values(), key=lambda x: x.get('confidence', 0), reverse=True)[:top_k]
-        return results
-
-    except Exception as e:
-        logger.error(f"Multimodal search error: {e}", exc_info=True)
-        return []
-
-
-def normalize_scores_rrf(results: List[Dict], k: int = 60) -> List[Dict]:
-    """
-    ✓ RECIPROCAL RANK FUSION (RRF) NORMALIZATION
-
-    Converts mixed scores (k-NN: 0-2, BM25: 0-∞) to unified 0-1 confidence range.
-    Formula: confidence = 1 / (k + rank)
-
-    Reference: OpenSearch Hybrid Search best practices
-    """
-    for rank, result in enumerate(results, 1):
-        # RRF converts any ranking to normalized score
-        rrf_score = 1.0 / (k + rank)
-        result['confidence'] = rrf_score
-        result['rank'] = rank
-
-    return results
 
 
 def get_all_unique_videos(client) -> List[Dict]:
