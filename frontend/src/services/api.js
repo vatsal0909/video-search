@@ -4,6 +4,8 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 const API_GATEWAY_URL = import.meta.env.VITE_API_GATEWAY_URL
 const BACKEND_ALB_URL = import.meta.env.VITE_BACKEND_ALB_URL
 
+const BACKEND_URL = BACKEND_ALB_URL
+
 const api = axios.create({
   baseURL: API_BASE_URL,
   headers: {
@@ -28,7 +30,7 @@ const api = axios.create({
 // New searchClips using API Gateway endpoint
 export const searchClips = async (query, topK = 10) => {
   try {
-    const response = await fetch(`${API_BASE_URL}/search`, {
+    const response = await fetch(`${BACKEND_URL}/search`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -36,7 +38,7 @@ export const searchClips = async (query, topK = 10) => {
       body: JSON.stringify({
         query_text: query,
         top_k: topK,
-        search_type: "hybrid"
+        search_type: "vector"
       }),
     });
     
@@ -98,7 +100,7 @@ export const askQuestion = async (question) => {
 
 export const listAllVideos = async () => {
   try {
-    const response = await fetch(`${BACKEND_ALB_URL}/list`, {
+    const response = await fetch(`${BACKEND_URL}/list`, {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',

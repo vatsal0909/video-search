@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Video Search Service", version="1.0.0")
 
-INDEX_NAME = "video_clips_cosine_sim"
+INDEX_NAME = "video_clips_test"
 
 app.add_middleware(
     CORSMiddleware,
