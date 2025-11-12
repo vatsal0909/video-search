@@ -37,7 +37,7 @@ export const searchClips = async (query, topK = 10, searchType = 'vector') => {
       },
       body: JSON.stringify({
         query_text: query,
-        top_k: topK,
+        top_k: 10,
         search_type: searchType
       }),
     });

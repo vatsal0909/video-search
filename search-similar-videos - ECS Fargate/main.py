@@ -20,7 +20,7 @@ app = FastAPI(title="Video Search Service", version="1.0.0")
 
 # CHANGE 1: Updated index name to consolidated index
 INDEX_NAME = "video_clips_consolidated"
-
+VECTOR_PIPELINE = "vector-norm-pipeline-consolidated-index-rrf"
 
 app.add_middleware(
     CORSMiddleware,
@@ -256,7 +256,7 @@ def convert_s3_to_presigned_urls(s3_client, results: List[Dict], expiration: int
                 )
                 
                 result['thumbnail_path'] = presigned_url
-                logger.info(f"✓ Generated presigned URL for thumbnail: {key}")
+                # logger.info(f"✓ Generated presigned URL for thumbnail: {key}")
                 
             except Exception as e:
                 logger.warning(f"Error generating presigned URL for thumbnail {thumbnail_path}: {e}")
@@ -403,8 +403,24 @@ def vector_search(client, query_embedding: List[float], top_k: int = 10) -> List
             "hybrid": {
                 "queries": [
                     # ordering here should match weights defined in the pipeline (0.7, 0.3)
-                    {"knn": {"emb_vis_text": {"vector": query_embedding, "k": top_k}}},
-                    {"knn": {"emb_audio": {"vector": query_embedding, "k": top_k}}}
+                    {
+                        "knn": {
+                            "emb_vis_text": 
+                            {
+                                "vector": query_embedding, 
+                                "k": top_k
+                            }
+                        }
+                    },
+                    {
+                        "knn": {
+                            "emb_audio": 
+                            {
+                                "vector": query_embedding, 
+                                "k": top_k
+                            }
+                        }
+                    }
                 ]
             }
         },
@@ -416,7 +432,7 @@ def vector_search(client, query_embedding: List[float], top_k: int = 10) -> List
         search_params = {
                 "index": INDEX_NAME,
                 "body": search_body,
-                "search_pipeline": "vector-norm-pipeline-consolidated-index"
+                "search_pipeline": VECTOR_PIPELINE
             }
     else:
         search_params = {
@@ -456,7 +472,7 @@ def visual_search(client, query_embedding: List[float], top_k: int = 10) -> List
             "knn": {
                 "emb_vis_text": {
                     "vector": query_embedding,
-                    "k": top_k
+                    "min_score": 0.6
                 }
             }
         },
@@ -476,7 +492,7 @@ def audio_search(client, query_embedding: List[float], top_k: int = 10) -> List[
             "knn": {
                 "emb_audio": {
                     "vector": query_embedding,
-                    "k": top_k
+                    "min_score": 0.6
                 }
             }
         },
@@ -531,19 +547,32 @@ def _create_hybrid_search_pipeline(client):
 def _create_vector_search_pipeline(client):
     """Create search pipeline with score normalization for vector search"""
     
+    # pipeline_body = {
+    #     "description": "Post-processing pipeline for vector search with min-max normalization (0-1 range)",
+    #     "phase_results_processors": [
+    #         {
+    #             "normalization-processor": {
+    #                 "normalization": {
+    #                     "technique": "min_max"
+    #                 },
+    #                 "combination": {
+    #                     "technique": "arithmetic_mean",
+    #                     "parameters": {
+    #                         "weights": [0.6, 0.4]
+    #                     }
+    #                 }
+    #             }
+    #         }
+    #     ]
+    # }
     pipeline_body = {
-        "description": "Post-processing pipeline for vector search with min-max normalization (0-1 range)",
+        "description": "Post processor for hybrid RRF search",
         "phase_results_processors": [
             {
-                "normalization-processor": {
-                    "normalization": {
-                        "technique": "min_max"
-                    },
+                "score-ranker-processor": {
                     "combination": {
-                        "technique": "arithmetic_mean",
-                        "parameters": {
-                            "weights": [0.7, 0.3]
-                        }
+                        "technique": "rrf",
+                        "rank_constant": 1
                     }
                 }
             }
@@ -552,11 +581,11 @@ def _create_vector_search_pipeline(client):
     
     try:
         try:
-            client.search_pipeline.get(id="vector-norm-pipeline-consolidated-index")
+            client.search_pipeline.get(id=VECTOR_PIPELINE)
             logger.info("✓ Vector search pipeline already exists")
         except:
             client.search_pipeline.put(
-                id="vector-norm-pipeline-consolidated-index",
+                id=VECTOR_PIPELINE,
                 body=pipeline_body
             )
             logger.info("✓ Created vector search pipeline with min-max normalization")
