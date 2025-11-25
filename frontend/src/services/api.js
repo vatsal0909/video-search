@@ -224,6 +224,7 @@ export const searchClipsMarengo3 = async (query = null, topK = 10, searchType = 
     console.log(`  - Search type: ${searchType}`);
     console.log(`  - Results found: ${data.clips?.length || 0}`);
     console.log(`  - Total: ${data.total}`);
+    console.log(`  - Search Intent: ${data.classified_intent}`);
     
     return data;
   } catch (error) {

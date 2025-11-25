@@ -41,6 +41,7 @@ const VideoClipCard = ({ clip, onClick, from }) => {
     setIsHovering(true);
     const videoEl = videoRef.current;
     if (videoEl) {
+      videoEl.volume = 0.5; // Set default volume to 50%
       videoEl.currentTime = timestamp_start || 0;
       const playPromise = videoEl.play();
       if (playPromise?.catch) {

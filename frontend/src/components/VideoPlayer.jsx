@@ -13,6 +13,9 @@ const VideoPlayer = ({ clip, onClose }) => {
       return;
     }
 
+    // Set default volume to 50%
+    videoElement.volume = 0.5;
+    
     videoElement.currentTime = clip.timestamp_start;
     const playPromise = videoElement.play();
 

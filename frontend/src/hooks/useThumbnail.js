@@ -20,7 +20,7 @@ export const use_thumbnail = (videoUrl, videoId, timestamp, thumbnailPath = null
       try {
         // Priority 1: Use thumbnail_path if available (presigned URL from backend)
         if (thumbnailPath) {
-          console.log('Using thumbnail_path from backend:', thumbnailPath);
+          // console.log('Using thumbnail_path from backend:', thumbnailPath);
           if (isMounted) {
             setThumbnail(thumbnailPath);
             setIsLoading(false);
