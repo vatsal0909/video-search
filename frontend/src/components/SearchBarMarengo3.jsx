@@ -32,9 +32,9 @@ const SearchBarMarengo3 = ({ onSearch, isLoading, onSearchTypeChange, queryValue
     
     // UPDATED: 7 search options - specific combinations instead of intent-based
     // Two-modality combinations
-    if (visual && audio && !transcription) return 'visual_audio';
-    if (visual && !audio && transcription) return 'visual_transcription';
-    if (!visual && audio && transcription) return 'audio_transcription';
+    if (visual && audio && !transcription) return 'vector';
+    if (visual && !audio && transcription) return 'vector';
+    if (!visual && audio && transcription) return 'vector';
     
     // All three modalities → 'vector' (balanced search)
     if (visual && audio && transcription) return 'vector';

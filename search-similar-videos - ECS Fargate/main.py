@@ -9,7 +9,7 @@ import uuid
 import datetime
 import asyncio
 from opensearchpy import OpenSearch, RequestsHttpConnection, AWSV4SignerAuth
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from pydantic import BaseModel
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
@@ -55,7 +55,7 @@ VECTOR_PIPELINE_3_AUDIO_TRANSCRIPTION = "vector-norm-pipeline-video-clips-3-audi
 
 # Intent-to-weights mapping for RRF pipeline (visual, audio, transcription)
 INTENT_WEIGHTS = {
-    "VISUAL":   [1.0, 0.0, 0.0],   # visual-focused
+    "VISUAL":   [0.8, 0.1, 0.1],   # visual-focused
     "AUDIO":    [0.05, 0.8, 0.15],   # audio-focused
     "TRANSCRIPT": [0.05, 0.15, 0.8], # text-focused
     "BALANCED": [0.34, 0.33, 0.33] # balanced across all
@@ -94,12 +94,12 @@ async def startup_event():
         _create_vector_search_pipeline_3_vector(opensearch_client)
 
         # # Create intent-based pipelines for Marengo 3
-        # logger.info("Creating intent-based search pipelines...")
-        # _create_intent_based_pipelines(opensearch_client)
+        logger.info("Creating intent-based search pipelines...")
+        _create_intent_based_pipelines(opensearch_client)
 
         # Create combination pipelines for Marengo 3 (7 search options)
-        logger.info("Creating combination search pipelines for Marengo 3...")
-        _create_combination_pipelines(opensearch_client)
+        # logger.info("Creating combination search pipelines for Marengo 3...")
+        # _create_combination_pipelines(opensearch_client)
 
         # logger.info("Configuring S3 CORS policy...")
         # _configure_s3_cors(s3_client)
@@ -135,6 +135,7 @@ class VideosListResponse(BaseModel):
 class SearchResponse(BaseModel):
     query: str
     classified_intent: Optional[str] = None  
+    weights_used: Optional[List[Any]] = []
     search_type: str
     total: int
     clips: List[Dict]
@@ -289,6 +290,13 @@ async def search_videos_marengo3(request: SearchRequest):
         top_k = request.top_k
         search_type = request.search_type
 
+        intent_pipeline_map = {
+        "VISUAL": VECTOR_PIPELINE_3_VISUAL,
+        "AUDIO": VECTOR_PIPELINE_3_AUDIO,
+        "TRANSCRIPT": VECTOR_PIPELINE_3_TRANSCRIPT,
+        "BALANCED": VECTOR_PIPELINE_3_BALANCED,
+    }
+
         # Validate that at least one input is provided
         if not query_text and not image_base64:
             raise HTTPException(
@@ -321,48 +329,48 @@ async def search_videos_marengo3(request: SearchRequest):
         classified_intent = None
         query_embedding = None
 
-        # # COMMENTED OUT: Intent classification temporarily disabled
-        # if query_text and not image_base64 and search_type == "vector":
-        #     # For text-only vector search: Run BOTH intent classification and embedding generation in parallel
-        #     logger.info(
-        #         "📊 Step 1 & 2: Running intent classification and embedding generation concurrently..."
-        #     )
+        # COMMENTED OUT: Intent classification temporarily disabled
+        if query_text and not image_base64 and search_type == "vector":
+            # For text-only vector search: Run BOTH intent classification and embedding generation in parallel
+            logger.info(
+                "📊 Step 1 & 2: Running intent classification and embedding generation concurrently..."
+            )
 
-        #     # Create both tasks
-        #     intent_task = classify_query_intent(bedrock_runtime, query_text)
-        #     embedding_task = asyncio.to_thread(
-        #         generate_embedding_marengo3,
-        #         bedrock_runtime,
-        #         text=query_text,
-        #         image_base64=image_base64,
-        #     )
+            # Create both tasks
+            intent_task = classify_query_intent(bedrock_runtime, query_text)
+            embedding_task = asyncio.to_thread(
+                generate_embedding_marengo3,
+                bedrock_runtime,
+                text=query_text,
+                image_base64=image_base64,
+            )
 
-        #     # Run both concurrently and wait for both to complete
-        #     classified_intent, query_embedding = await asyncio.gather(
-        #         intent_task, embedding_task
-        #     )
+            # Run both concurrently and wait for both to complete
+            classified_intent, query_embedding = await asyncio.gather(
+                intent_task, embedding_task
+            )
 
-        #     logger.info(f"✓ Intent classification result: {classified_intent}")
-        #     logger.info(
-        #         f"✓ Generated {search_input_type} embedding (Marengo 3) with {len(query_embedding) if query_embedding else 0} dimensions"
-        #     )
+            logger.info(f"✓ Intent classification result: {classified_intent}")
+            logger.info(
+                f"✓ Generated {search_input_type} embedding (Marengo 3) with {len(query_embedding) if query_embedding else 0} dimensions"
+            )
 
-        #     # Map intent to search type
-        #     intent_based_search_type = get_search_type_from_intent(classified_intent)
-        #     logger.info(
-        #         f"📊 Mapped intent '{classified_intent}' to search_type: '{intent_based_search_type}'"
-        #     )
-        # else:
-        # For other cases (image, multimodal, or direct modality search): Only generate embedding
-        logger.info(
-            f"📊 Step 2: Generating {search_input_type} embedding using Marengo 3"
-        )
-        query_embedding = generate_embedding_marengo3(
-            bedrock_runtime, text=query_text, image_base64=image_base64
-        )
-        logger.info(
-            f"✓ Generated {search_input_type} embedding (Marengo 3) with {len(query_embedding) if query_embedding else 0} dimensions"
-        )
+            # Map intent to search type
+            intent_based_search_type = get_search_type_from_intent(classified_intent)
+            logger.info(
+                f"📊 Mapped intent '{classified_intent}' to search_type: '{intent_based_search_type}'"
+            )
+        else:
+            # For other cases (image, multimodal, or direct modality search): Only generate embedding
+            logger.info(
+                f"📊 Step 2: Generating {search_input_type} embedding using Marengo 3"
+            )
+            query_embedding = generate_embedding_marengo3(
+                bedrock_runtime, text=query_text, image_base64=image_base64
+            )
+            logger.info(
+                f"✓ Generated {search_input_type} embedding (Marengo 3) with {len(query_embedding) if query_embedding else 0} dimensions"
+            )
 
         if not query_embedding:
             raise HTTPException(
@@ -381,32 +389,32 @@ async def search_videos_marengo3(request: SearchRequest):
                 opensearch_client, query_embedding, top_k, "video_clips_3_lucene"
             )
         elif search_type == "vector":
-            # # COMMENTED OUT: Intent-based vector search temporarily disabled
-            # # For vector search, use intent classification if available (text-only queries)
-            # if classified_intent:
-            #     logger.info(
-            #         f"📊 Using intent-based vector search with intent: {classified_intent}"
-            #     )
-            #     results = vector_search_marengo3_with_intent(
-            #         opensearch_client,
-            #         query_embedding,
-            #         classified_intent,
-            #         top_k,
-            #         "video_clips_3_lucene",
-            #     )
-            # else:
-            #     # For image or multimodal queries, use balanced weights
-            #     logger.info(
-            #         "📊 Using balanced vector search (image or multimodal query)"
-            #     )
-            #     results = vector_search_marengo3(
-            #         opensearch_client, query_embedding, top_k, "video_clips_3_lucene"
-            #     )
-            # Using balanced vector search (all 3 modalities)
-            logger.info("📊 Using balanced vector search (all 3 modalities)")
-            results = vector_search_marengo3(
-                opensearch_client, query_embedding, top_k, "video_clips_3_lucene"
-            )
+            # COMMENTED OUT: Intent-based vector search temporarily disabled
+            # For vector search, use intent classification if available (text-only queries)
+            if classified_intent:
+                logger.info(
+                    f"📊 Using intent-based vector search with intent: {classified_intent}"
+                )
+                results = vector_search_marengo3_with_intent(
+                    opensearch_client,
+                    query_embedding,
+                    classified_intent,
+                    top_k,
+                    "video_clips_3_lucene",
+                )
+            else:
+                # For image or multimodal queries, use balanced weights
+                logger.info(
+                    "📊 Using balanced vector search (image or multimodal query)"
+                )
+                results = vector_search_marengo3(
+                    opensearch_client, query_embedding, top_k, "video_clips_3_lucene"
+                )
+            # # Using balanced vector search (all 3 modalities)
+            # logger.info("📊 Using balanced vector search (all 3 modalities)")
+            # results = vector_search_marengo3(
+            #     opensearch_client, query_embedding, top_k, "video_clips_3_lucene"
+            # )
         elif search_type == "visual":
             results = visual_search_marengo3(
                 opensearch_client, query_embedding, top_k, "video_clips_3_lucene"
@@ -419,18 +427,18 @@ async def search_videos_marengo3(request: SearchRequest):
             results = transcription_search_marengo3(
                 opensearch_client, query_embedding, top_k, "video_clips_3_lucene"
             )
-        elif search_type == "visual_audio":
-            results = vector_search_visual_audio_marengo3(
-                opensearch_client, query_embedding, top_k, "video_clips_3_lucene"
-            )
-        elif search_type == "visual_transcription":
-            results = vector_search_visual_transcription_marengo3(
-                opensearch_client, query_embedding, top_k, "video_clips_3_lucene"
-            )
-        elif search_type == "audio_transcription":
-            results = vector_search_audio_transcription_marengo3(
-                opensearch_client, query_embedding, top_k, "video_clips_3_lucene"
-            )
+        # elif search_type == "visual_audio":
+        #     results = vector_search_visual_audio_marengo3(
+        #         opensearch_client, query_embedding, top_k, "video_clips_3_lucene"
+        #     )
+        # elif search_type == "visual_transcription":
+        #     results = vector_search_visual_transcription_marengo3(
+        #         opensearch_client, query_embedding, top_k, "video_clips_3_lucene"
+        #     )
+        # elif search_type == "audio_transcription":
+        #     results = vector_search_audio_transcription_marengo3(
+        #         opensearch_client, query_embedding, top_k, "video_clips_3_lucene"
+        #     )
         else:
             raise HTTPException(
                 status_code=400,
@@ -445,9 +453,23 @@ async def search_videos_marengo3(request: SearchRequest):
 
         logger.info(f"✓ Search (Marengo 3) completed, found {len(results)} results")
 
+        # Retrieve actual weights from OpenSearch pipeline configuration
+        weights_used = []
+        if classified_intent and classified_intent in intent_pipeline_map:
+            try:
+                pipeline_id = intent_pipeline_map[classified_intent]
+                pipeline_response = opensearch_client.search_pipeline.get(id=pipeline_id)
+
+                weights_used =  [str(pipeline_response)]
+            except Exception as e:
+                logger.warning(f"Failed to retrieve weights from pipeline: {e}")
+        else:
+            weights_used = []
+
         return SearchResponse(
             query=query_display,
             classified_intent=classified_intent,
+            weights_used=weights_used,
             search_type=search_type_display,
             total=len(results),
             clips=results,
