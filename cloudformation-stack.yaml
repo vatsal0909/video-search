@@ -1,0 +1,1114 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Condenast Video Search Infrastructure Stack
+
+Parameters:
+  AccountId:
+    Type: String
+    Default: '943143228843'
+  Region:
+    Type: String
+    Default: 'us-east-1'
+  ECSTaskExecutionRoleArn:
+    Type: String
+    Default: 'arn:aws:iam::943143228843:role/condenast-ecs-task-execution-role'
+  ECSTaskRoleArn:
+    Type: String
+    Default: 'arn:aws:iam::943143228843:role/condenast-ecs-task-role'
+  SearchSimilarVideosTaskRoleArn:
+    Type: String
+    Default: 'arn:aws:iam::943143228843:role/condenast-search-similar-videos-ecs-task-role'
+  LambdaExecutionRoleArn:
+    Type: String
+    Default: 'arn:aws:iam::943143228843:role/condenast-lambda-execution-role'
+  LambdaOpenSearchRoleArn:
+    Type: String
+    Default: 'arn:aws:iam::943143228843:role/condenast-lambda-opensearch-role'
+  StepFunctionsExecutionRoleArn:
+    Type: String
+    Default: 'arn:aws:iam::943143228843:role/condenast-stepfunctions-execution-role'
+  OpenSearchSnapshotRoleArn:
+    Type: String
+    Default: 'arn:aws:iam::943143228843:role/condenast-opensearch-snapshot-role'
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: condenast-vpc
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: condenast-igw
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: condenast-public-subnet-1
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: 10.0.2.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: condenast-public-subnet-2
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: 10.0.3.0/24
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: condenast-private-subnet-1
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: 10.0.4.0/24
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: condenast-private-subnet-2
+
+  NatGatewayEIP:
+    Type: AWS::EC2::EIP
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      Domain: vpc
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayEIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: condenast-nat-gateway
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: condenast-public-rt
+
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet2
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: condenast-private-rt
+
+  DefaultPrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet1
+
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet2
+
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for ALB
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: condenast-alb-sg
+
+  ECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for ECS tasks
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: condenast-ecs-sg
+
+  OpenSearchSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for OpenSearch
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref ECSSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: condenast-opensearch-sg
+
+  OpenSearchSecurityGroupSelfIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref OpenSearchSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !Ref OpenSearchSecurityGroup
+
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Lambda functions
+      VpcId: !Ref VPC
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: condenast-lambda-sg
+
+  OpenSearchSecurityGroupLambdaIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref OpenSearchSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !Ref LambdaSecurityGroup
+
+  VideoPreprocessingLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/video-preprocessing
+      RetentionInDays: 7
+
+  SearchSimilarVideosLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/search-similar-videos-task
+      RetentionInDays: 7
+
+  InvokeBedrockMarengoLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/condenast-invoke-bedrock-marengo
+      RetentionInDays: 7
+
+  StoreEmbeddingsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/condenast-store-embeddings-opensearch
+      RetentionInDays: 7
+
+  InvokeStepFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/condenast-invoke-video-processing-step-function
+      RetentionInDays: 7
+
+  CreateSnapshotLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/condenast-create-opensearch-snapshot
+      RetentionInDays: 7
+
+  OpenSearchDomain:
+    Type: AWS::OpenSearchService::Domain
+    Properties:
+      DomainName: condenast-aos-domain
+      EngineVersion: OpenSearch_2.11
+      ClusterConfig:
+        InstanceType: t3.medium.search
+        InstanceCount: 2
+        DedicatedMasterEnabled: false
+        ZoneAwarenessEnabled: true
+        ZoneAwarenessConfig:
+          AvailabilityZoneCount: 2
+      EBSOptions:
+        EBSEnabled: true
+        VolumeType: gp3
+        VolumeSize: 20
+      VPCOptions:
+        SubnetIds:
+          - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
+        SecurityGroupIds:
+          - !Ref OpenSearchSecurityGroup
+      EncryptionAtRestOptions:
+        Enabled: true
+      NodeToNodeEncryptionOptions:
+        Enabled: true
+      DomainEndpointOptions:
+        EnforceHTTPS: true
+        TLSSecurityPolicy: Policy-Min-TLS-1-2-2019-07
+      AdvancedSecurityOptions:
+        Enabled: true
+        InternalUserDatabaseEnabled: false
+        MasterUserOptions:
+          MasterUserARN: !Ref ECSTaskRoleArn
+      AccessPolicies:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS:
+                - !Ref ECSTaskRoleArn
+                - !Ref SearchSimilarVideosTaskRoleArn
+                - !Ref LambdaOpenSearchRoleArn
+            Action: es:*
+            Resource: !Sub 'arn:aws:es:${Region}:${AccountId}:domain/condenast-aos-domain/*'
+
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: condenast-search-similar-videos-cluster
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+
+  VideoPreprocessingTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: video-preprocessing-task
+      RequiresCompatibilities:
+        - FARGATE
+      NetworkMode: awsvpc
+      Cpu: '2048'
+      Memory: '4096'
+      ExecutionRoleArn: !Ref ECSTaskExecutionRoleArn
+      TaskRoleArn: !Ref ECSTaskRoleArn
+      ContainerDefinitions:
+        - Name: video-preprocessor
+          Image: !Sub '${AccountId}.dkr.ecr.${Region}.amazonaws.com/video-preprocessing:latest'
+          Essential: true
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/video-preprocessing
+              awslogs-region: !Ref Region
+              awslogs-stream-prefix: ecs
+              awslogs-create-group: 'true'
+
+  SearchSimilarVideosTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    DependsOn: OpenSearchDomain
+    Properties:
+      Family: search-similar-videos-task
+      RequiresCompatibilities:
+        - FARGATE
+      NetworkMode: awsvpc
+      Cpu: '1024'
+      Memory: '2048'
+      ExecutionRoleArn: !Ref ECSTaskExecutionRoleArn
+      TaskRoleArn: !Ref SearchSimilarVideosTaskRoleArn
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
+      ContainerDefinitions:
+        - Name: search-similar-videos-container
+          Image: !Sub '${AccountId}.dkr.ecr.${Region}.amazonaws.com/condenast/search-similar-videos:latest'
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8000
+              HostPort: 8000
+              Protocol: tcp
+              AppProtocol: http
+          Environment:
+            - Name: AWS_REGION
+              Value: !Ref Region
+            - Name: OPENSEARCH_CLUSTER_HOST
+              Value: !Sub 'https://${OpenSearchDomain.DomainEndpoint}'
+            - Name: AWS_S3_BUCKET
+              Value: !Sub 'condenast-landingzone-useast1-${AccountId}-dev'
+            - Name: PORT
+              Value: '8000'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/search-similar-videos-task
+              awslogs-region: !Ref Region
+              awslogs-stream-prefix: ecs
+              awslogs-create-group: 'true'
+
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: condenast-search-alb
+      Scheme: internet-facing
+      Type: application
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: search-similar-videos-tg
+      Protocol: HTTP
+      Port: 8000
+      TargetType: ip
+      VpcId: !Ref VPC
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  ECSService:
+    Type: AWS::ECS::Service
+    DependsOn: ALBListener
+    Properties:
+      ServiceName: search-similar-videos-service
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref SearchSimilarVideosTaskDefinition
+      DesiredCount: 2
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          Subnets:
+            - !Ref PrivateSubnet1
+            - !Ref PrivateSubnet2
+          SecurityGroups:
+            - !Ref ECSSecurityGroup
+          AssignPublicIp: DISABLED
+      LoadBalancers:
+        - ContainerName: search-similar-videos-container
+          ContainerPort: 8000
+          TargetGroupArn: !Ref TargetGroup
+      HealthCheckGracePeriodSeconds: 60
+
+  AutoScalingTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity: 10
+      MinCapacity: 2
+      ResourceId: !Sub 'service/${ECSCluster}/${ECSService.Name}'
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+      RoleARN: !Sub 'arn:aws:iam::${AccountId}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService'
+
+  AutoScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: search-similar-videos-scaling-policy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref AutoScalingTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ALBRequestCountPerTarget
+          ResourceLabel: !Sub '${ApplicationLoadBalancer.LoadBalancerFullName}/${TargetGroup.TargetGroupFullName}'
+        TargetValue: 1000
+        ScaleInCooldown: 300
+        ScaleOutCooldown: 60
+
+  InvokeBedrockMarengoFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: condenast-invoke-bedrock-marengo
+      Runtime: python3.11
+      Handler: index.lambda_handler
+      Timeout: 300
+      MemorySize: 512
+      Role: !Ref LambdaExecutionRoleArn
+      Environment:
+        Variables:
+          AWS_BUCKET_OWNER: !Ref AccountId
+      VpcConfig:
+        SubnetIds:
+          - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import os
+          bedrock_runtime = boto3.client('bedrock-runtime', region_name='us-east-1')
+          def lambda_handler(event, context):
+              bucket = event['bucket']
+              key = event['key']
+              part = event['part']
+              MARENGO_MODEL_VERSION = 3
+              print(f"Processing {key} in bucket {bucket}")
+              dst_bucket = 'condenast-processed-useast1-943143228843-dev'
+              if MARENGO_MODEL_VERSION == 3:
+                  modelId = 'twelvelabs.marengo-embed-3-0-v1:0'
+                  request_body = {
+                      "inputType": "video",
+                      "video": {
+                          "mediaSource": {
+                              "s3Location": {
+                                  "uri": f"s3://{bucket}/{key}",
+                                  "bucketOwner": os.environ["AWS_BUCKET_OWNER"]
+                              }
+                          },
+                          "embeddingOption": ["visual", "audio", "transcription"],
+                          "embeddingScope": ["clip"]
+                      }
+                  }
+              else:
+                  modelId = "twelvelabs.marengo-embed-2-7-v1:0"
+                  request_body = {
+                      "inputType": "video",
+                      "mediaSource": {
+                          "s3Location": {
+                              "uri": f"s3://{bucket}/{key}",
+                              "bucketOwner": os.environ["AWS_BUCKET_OWNER"]
+                          }
+                      },
+                      "embeddingOption": ["visual-text", "audio", "visual-image"]
+                  }
+              if MARENGO_MODEL_VERSION == 3:
+                  outputS3uri = f"s3://{dst_bucket}/embeddings-marengo-3/{key}/"
+              else:
+                  outputS3uri = f"s3://{dst_bucket}/embeddings/{key}/"
+              response = bedrock_runtime.start_async_invoke(
+                  modelId=modelId,
+                  modelInput=request_body,
+                  outputDataConfig={"s3OutputDataConfig": {"s3Uri": outputS3uri}}
+              )
+              print(f"Started Bedrock job: {response['invocationArn']} for part {part}")
+              return {
+                  'jobId': response['invocationArn'],
+                  'invocationArn': response['invocationArn'],
+                  'part': part,
+                  'outputS3Uri': outputS3uri
+              }
+
+  StoreEmbeddingsFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: OpenSearchDomain
+    Properties:
+      FunctionName: condenast-store-embeddings-opensearch
+      Runtime: python3.11
+      Handler: index.lambda_handler
+      Timeout: 300
+      MemorySize: 1024
+      Role: !Ref LambdaOpenSearchRoleArn
+      Environment:
+        Variables:
+          OPENSEARCH_CLUSTER_HOST: !Sub 'https://${OpenSearchDomain.DomainEndpoint}'
+      VpcConfig:
+        SubnetIds:
+          - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import os
+          import hashlib
+          from opensearchpy import OpenSearch, RequestsHttpConnection, AWSV4SignerAuth
+          import uuid
+          def lambda_handler(event, context):
+              try:
+                  output_s3_path = event['outputS3Path']
+                  part = event['part']
+                  original_video = event['originalVideo']
+                  video_id = str(uuid.uuid4())
+                  print(f"Processing embeddings for part {part}")
+                  print(f"Video ID: {video_id}")
+                  print(f"Output S3 path: {output_s3_path}")
+                  s3_client = boto3.client('s3', region_name='us-east-1')
+                  opensearch_client = get_opensearch_client()
+                  bucket, key = parse_s3_uri(output_s3_path)
+                  embeddings_data = download_embeddings_from_s3(s3_client, bucket, key)
+                  if not embeddings_data:
+                      raise ValueError("No embeddings data found in S3")
+                  print(f"Successfully downloaded embeddings for part {part}")
+                  indexed_count = index_embeddings_to_opensearch(opensearch_client, embeddings_data, video_id, original_video, part)
+                  print(f"Successfully indexed {indexed_count} embeddings for part {part}")
+                  return {'statusCode': 200, 'part': part, 'videoId': video_id, 'embeddingsIndexed': indexed_count, 'message': 'Successfully stored embeddings in OpenSearch'}
+              except Exception as e:
+                  print(f"Error storing embeddings: {str(e)}")
+                  import traceback
+                  traceback.print_exc()
+                  raise
+          def get_opensearch_client():
+              opensearch_host = os.environ['OPENSEARCH_CLUSTER_HOST']
+              opensearch_host = opensearch_host.replace('https://', '').replace('http://', '').strip()
+              session = boto3.Session()
+              credentials = session.get_credentials()
+              auth = AWSV4SignerAuth(credentials, 'us-east-1', 'es')
+              return OpenSearch(hosts=[{'host': opensearch_host, 'port': 443}], http_auth=auth, use_ssl=True, verify_certs=True, connection_class=RequestsHttpConnection, pool_maxsize=20)
+          def parse_s3_uri(s3_uri):
+              s3_parts = s3_uri.replace('s3://', '').split('/', 1)
+              bucket = s3_parts[0]
+              key = s3_parts[1] if len(s3_parts) > 1 else ''
+              return bucket, key
+          def download_embeddings_from_s3(s3_client, bucket, key_prefix):
+              possible_keys = [f"{key_prefix}/output.json"]
+              for key in possible_keys:
+                  try:
+                      print(f"Trying to read from s3://{bucket}/{key}")
+                      obj = s3_client.get_object(Bucket=bucket, Key=key)
+                      result = json.loads(obj['Body'].read().decode('utf-8'))
+                      print(f"Successfully read embeddings from S3")
+                      return result
+                  except s3_client.exceptions.NoSuchKey:
+                      continue
+                  except Exception as e:
+                      print(f"Error reading from S3 key {key}: {e}")
+                      continue
+              raise ValueError(f"Could not find embeddings output in S3 at {bucket}/{key_prefix}")
+          def generate_clip_id(video_id, start_time, end_time):
+              clip_string = f"{video_id}_{start_time:.2f}_{end_time:.2f}"
+              clip_hash = hashlib.sha256(clip_string.encode()).hexdigest()[:16]
+              return f"clip_{clip_hash}"
+          def validate_embedding(embedding, expected_dim=1024):
+              if not isinstance(embedding, list):
+                  return False, f"Embedding is not a list: {type(embedding)}"
+              if len(embedding) != expected_dim:
+                  return False, f"Embedding dimension mismatch: expected {expected_dim}, got {len(embedding)}"
+              for i, val in enumerate(embedding):
+                  if not isinstance(val, (int, float)):
+                      return False, f"Embedding contains non-numeric value at index {i}: {val}"
+                  if val != val:
+                      return False, f"Embedding contains NaN at index {i}"
+              return True, "Valid"
+          def index_embeddings_to_opensearch(opensearch_client, embeddings_data, video_id, original_video, part):
+              index_name = "video_clips"
+              indexed_count = 0
+              segments = embeddings_data.get('data', [])
+              print(f"Found {len(segments)} segments to index")
+              for idx, segment in enumerate(segments):
+                  try:
+                      embedding = segment.get('embedding', [])
+                      is_valid, validation_msg = validate_embedding(embedding)
+                      if not is_valid:
+                          print(f"Skipping segment {idx}: {validation_msg}")
+                          continue
+                      start_time = round(segment.get('startSec', 0), 2)
+                      end_time = round(segment.get('endSec', 0), 2)
+                      clip_id = generate_clip_id(video_id, start_time, end_time)
+                      doc = {'video_id': video_id, 'video_path': f"s3://{original_video['bucket']}/{original_video['key']}", 'clip_id': clip_id, 'part': part, 'segment_index': idx, 'timestamp_start': float(segment.get('startSec', 0)), 'timestamp_end': float(segment.get('endSec', 0)), 'clip_text': original_video['key'].split('/')[-1], 'embedding_scope': segment.get('embeddingOption', 'clip'), 'embedding': embedding}
+                      opensearch_client.index(index=index_name, body=doc)
+                      indexed_count += 1
+                      if indexed_count % 10 == 0:
+                          print(f"Indexed {indexed_count}/{len(segments)} segments")
+                  except Exception as e:
+                      print(f"Error indexing segment {idx}: {e}")
+                      continue
+              return indexed_count
+
+  InvokeStepFunctionFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: VideoProcessingStateMachine
+    Properties:
+      FunctionName: condenast-invoke-video-processing-step-function
+      Runtime: python3.11
+      Handler: index.lambda_handler
+      Timeout: 60
+      MemorySize: 256
+      Role: !Ref LambdaExecutionRoleArn
+      Environment:
+        Variables:
+          STATE_MACHINE_ARN: !Ref VideoProcessingStateMachine
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import os
+          from datetime import datetime
+          from urllib.parse import unquote_plus
+          sfn_client = boto3.client('stepfunctions')
+          STATE_MACHINE_ARN = os.environ['STATE_MACHINE_ARN']
+          def lambda_handler(event, context):
+              for record in event['Records']:
+                  bucket = record['s3']['bucket']['name']
+                  key = unquote_plus(record['s3']['object']['key'])
+                  dst_bucket = 'condenast-raw-useast1-943143228843-dev'
+                  timestamp = str(datetime.now().strftime('%m-%d-%Y_%H-%M-%S'))
+                  if not key.lower().endswith(('.mp4', '.mov', '.avi')):
+                      print(f"Skipping non-video file: {key}")
+                      continue
+                  sfn_input = {
+                      "detail": {
+                          "bucket": {"name": bucket},
+                          "object": {"key": key},
+                          "dst_bucket": {"key": dst_bucket}
+                      }
+                  }
+                  try:
+                      response = sfn_client.start_execution(
+                          stateMachineArn=STATE_MACHINE_ARN,
+                          name=f"video-process-{key.replace('/', '-').replace('.', '-').replace(' ', '-')[:28]}-{timestamp}",
+                          input=json.dumps(sfn_input)
+                      )
+                      print(f"Started Step Functions execution: {response['executionArn']}")
+                  except Exception as e:
+                      print(f"Error starting Step Functions: {str(e)}")
+                      raise
+              return {'statusCode': 200, 'body': json.dumps('Step Functions triggered successfully')}
+
+  CreateSnapshotFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: OpenSearchDomain
+    Properties:
+      FunctionName: condenast-create-opensearch-snapshot
+      Runtime: python3.11
+      Handler: index.lambda_handler
+      Timeout: 300
+      MemorySize: 512
+      Role: !Ref LambdaOpenSearchRoleArn
+      Environment:
+        Variables:
+          OPENSEARCH_CLUSTER_HOST: !Sub 'https://${OpenSearchDomain.DomainEndpoint}'
+          SNAPSHOT_ROLE_ARN: !Ref OpenSearchSnapshotRoleArn
+          S3_BUCKET: condenast-fe
+          REPO_NAME: condenast-snapshot-repo
+      VpcConfig:
+        SubnetIds:
+          - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+      Code:
+        ZipFile: |
+          import boto3
+          import requests
+          import time
+          import json
+          import os
+          import logging
+          from botocore.awsrequest import AWSRequest
+          from botocore.auth import SigV4Auth
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+          def signed_request(method, url, region, service, credentials, json_body=None, headers=None, timeout=60):
+              body = None
+              if json_body is not None:
+                  body = json.dumps(json_body)
+                  if headers is None:
+                      headers = {}
+                  headers = dict(headers)
+                  headers.setdefault("Content-Type", "application/json")
+              aws_request = AWSRequest(method=method.upper(), url=url, data=body, headers=headers or {})
+              SigV4Auth(credentials, service, region).add_auth(aws_request)
+              prepared = requests.Request(method=aws_request.method, url=aws_request.url, data=aws_request.body, headers=dict(aws_request.headers)).prepare()
+              session = requests.Session()
+              response = session.send(prepared, timeout=timeout)
+              return response
+          def lambda_handler(event, context):
+              try:
+                  region = "us-east-1"
+                  service = "es"
+                  function = event.get("function", "register-snapshot-repo")
+                  domain = os.getenv("OPENSEARCH_CLUSTER_HOST", "").replace("https://", "").replace("http://", "")
+                  repo_name = os.getenv("REPO_NAME", "condenast-snapshot-repo")
+                  bucket = os.getenv("S3_BUCKET", "condenast-fe")
+                  role_arn = os.getenv("SNAPSHOT_ROLE_ARN")
+                  snapshot_name = f"manual-snapshot-{int(time.time())}"
+                  if not domain:
+                      raise ValueError("OPENSEARCH_CLUSTER_HOST environment variable not set")
+                  if not role_arn:
+                      raise ValueError("SNAPSHOT_ROLE_ARN environment variable not set")
+                  logger.info(f"Config: domain={domain}, repo={repo_name}, bucket={bucket}")
+                  session = boto3.Session()
+                  credentials = session.get_credentials().get_frozen_credentials()
+                  headers = {"Content-Type": "application/json"}
+                  register_payload = {"type": "s3", "settings": {"bucket": bucket, "region": region, "role_arn": role_arn, "base_path": "opensearch-snapshots", "server_side_encryption": True}}
+                  url_repo = f"https://{domain}/_snapshot/{repo_name}"
+                  logger.info(f"Registering repo {repo_name} ...")
+                  r = signed_request("PUT", url_repo, region, service, credentials, json_body=register_payload, headers=headers)
+                  logger.info(f"Register repo response: {r.status_code} {r.text}")
+                  if r.status_code not in (200, 201):
+                      logger.error(f"Repo registration failed: {r.text}")
+                      return {"statusCode": 400, "body": json.dumps({"error": "Repo registration failed", "details": r.text, "status_code": r.status_code})}
+                  if function == "register-snapshot-repo":
+                      return {"statusCode": 200, "body": json.dumps({"message": "Repository registered successfully", "repo_name": repo_name})}
+                  url_snap = f"https://{domain}/_snapshot/{repo_name}/{snapshot_name}"
+                  logger.info(f"Creating snapshot {snapshot_name} ...")
+                  r = signed_request("PUT", url_snap, region, service, credentials, headers=headers)
+                  logger.info(f"Create snapshot response: {r.status_code} {r.text}")
+                  if r.status_code not in (200, 201):
+                      logger.error(f"Snapshot creation failed: {r.text}")
+                      return {"statusCode": 400, "body": json.dumps({"error": "Snapshot creation failed", "details": r.text, "status_code": r.status_code})}
+                  time.sleep(10)
+                  url_status = f"https://{domain}/_snapshot/{repo_name}/{snapshot_name}/_status"
+                  r = signed_request("GET", url_status, region, service, credentials)
+                  logger.info(f"Snapshot status: {r.status_code} {r.text}")
+                  status_data = r.json() if r.status_code == 200 else {}
+                  return {"statusCode": 200, "body": json.dumps({"message": "Snapshot created successfully", "snapshot_name": snapshot_name, "repo_name": repo_name, "status": status_data})}
+              except Exception as e:
+                  logger.error(f"Error: {str(e)}", exc_info=True)
+                  return {"statusCode": 500, "body": json.dumps({"error": "Internal server error", "message": str(e)})}
+
+  VideoProcessingStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    DependsOn:
+      - InvokeBedrockMarengoFunction
+      - StoreEmbeddingsFunction
+    Properties:
+      StateMachineName: condenast-video-processing-pipeline
+      RoleArn: !Ref StepFunctionsExecutionRoleArn
+      DefinitionString: !Sub |
+        {
+          "Comment": "Video preprocessing pipeline with Bedrock Marengo and OpenSearch",
+          "StartAt": "PreprocessVideo",
+          "States": {
+            "PreprocessVideo": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::ecs:runTask.waitForTaskToken",
+              "Parameters": {
+                "LaunchType": "FARGATE",
+                "Cluster": "${ECSCluster.Arn}",
+                "TaskDefinition": "${VideoPreprocessingTaskDefinition}",
+                "NetworkConfiguration": {
+                  "AwsvpcConfiguration": {
+                    "Subnets": ["${PublicSubnet1}", "${PublicSubnet2}"],
+                    "SecurityGroups": ["${ECSSecurityGroup}"],
+                    "AssignPublicIp": "ENABLED"
+                  }
+                },
+                "Overrides": {
+                  "ContainerOverrides": [
+                    {
+                      "Name": "video-preprocessor",
+                      "Environment": [
+                        {"Name": "BUCKET_NAME", "Value.$": "$.detail.bucket.name"},
+                        {"Name": "VIDEO_KEY", "Value.$": "$.detail.object.key"},
+                        {"Name": "DESTINATION_BUCKET", "Value.$": "$.detail.dst_bucket.key"},
+                        {"Name": "TASK_TOKEN", "Value.$": "$$.Task.Token"}
+                      ]
+                    }
+                  ]
+                }
+              },
+              "ResultPath": "$.preprocessingResult",
+              "Next": "ProcessVideoParts",
+              "Retry": [
+                {
+                  "ErrorEquals": ["States.TaskFailed"],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 1,
+                  "BackoffRate": 2
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.error",
+                  "Next": "HandleFailure"
+                }
+              ]
+            },
+            "ProcessVideoParts": {
+              "Type": "Map",
+              "ItemsPath": "$.preprocessingResult.parts",
+              "MaxConcurrency": 5,
+              "Iterator": {
+                "StartAt": "StartBedrockMarengo",
+                "States": {
+                  "StartBedrockMarengo": {
+                    "Type": "Task",
+                    "Resource": "${InvokeBedrockMarengoFunction.Arn}",
+                    "Parameters": {
+                      "bucket.$": "$.bucket",
+                      "key.$": "$.key",
+                      "part.$": "$.part"
+                    },
+                    "ResultPath": "$.modelJob",
+                    "Next": "WaitBeforePoll"
+                  },
+                  "WaitBeforePoll": {
+                    "Type": "Wait",
+                    "Seconds": 10,
+                    "Next": "GetAsyncInvoke"
+                  },
+                  "GetAsyncInvoke": {
+                    "Type": "Task",
+                    "Parameters": {
+                      "InvocationArn.$": "$.modelJob.invocationArn"
+                    },
+                    "Resource": "arn:aws:states:::aws-sdk:bedrockruntime:getAsyncInvoke",
+                    "Next": "IsModelDone",
+                    "ResultPath": "$.status"
+                  },
+                  "IsModelDone": {
+                    "Type": "Choice",
+                    "Choices": [
+                      {
+                        "Variable": "$.status.Status",
+                        "StringEquals": "Completed",
+                        "Next": "StoreEmbeddings"
+                      },
+                      {
+                        "Variable": "$.status.Status",
+                        "StringEquals": "Failed",
+                        "Next": "PartFailed"
+                      },
+                      {
+                        "Variable": "$.status.Status",
+                        "StringEquals": "Stopped",
+                        "Next": "PartFailed"
+                      }
+                    ],
+                    "Default": "WaitBeforePoll"
+                  },
+                  "StoreEmbeddings": {
+                    "Type": "Task",
+                    "Resource": "${StoreEmbeddingsFunction.Arn}",
+                    "Parameters": {
+                      "outputS3Path.$": "$.status.OutputDataConfig.S3OutputDataConfig.S3Uri",
+                      "part.$": "$.part",
+                      "originalVideo": {
+                        "bucket.$": "$.bucket",
+                        "key.$": "$.key"
+                      }
+                    },
+                    "End": true
+                  },
+                  "PartFailed": {
+                    "Type": "Fail",
+                    "Cause": "Bedrock processing failed for video part"
+                  }
+                }
+              },
+              "ResultPath": "$.processingResults",
+              "Next": "AllPartsComplete",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.mapError",
+                  "Next": "HandleFailure"
+                }
+              ]
+            },
+            "AllPartsComplete": {
+              "Type": "Succeed",
+              "Comment": "All video parts processed and stored in OpenSearch"
+            },
+            "HandleFailure": {
+              "Type": "Fail",
+              "Error": "VideoProcessingFailed",
+              "Cause": "Pipeline failed - check logs for details"
+            }
+          }
+        }
+
+Outputs:
+  VPCId:
+    Description: VPC ID
+    Value: !Ref VPC
+    Export:
+      Name: !Sub '${AWS::StackName}-VPCId'
+
+  PublicSubnet1Id:
+    Description: Public Subnet 1 ID
+    Value: !Ref PublicSubnet1
+    Export:
+      Name: !Sub '${AWS::StackName}-PublicSubnet1Id'
+
+  PublicSubnet2Id:
+    Description: Public Subnet 2 ID
+    Value: !Ref PublicSubnet2
+    Export:
+      Name: !Sub '${AWS::StackName}-PublicSubnet2Id'
+
+  PrivateSubnet1Id:
+    Description: Private Subnet 1 ID
+    Value: !Ref PrivateSubnet1
+    Export:
+      Name: !Sub '${AWS::StackName}-PrivateSubnet1Id'
+
+  PrivateSubnet2Id:
+    Description: Private Subnet 2 ID
+    Value: !Ref PrivateSubnet2
+    Export:
+      Name: !Sub '${AWS::StackName}-PrivateSubnet2Id'
+
+  ALBSecurityGroupId:
+    Description: ALB Security Group ID
+    Value: !Ref ALBSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-ALBSecurityGroupId'
+
+  ECSSecurityGroupId:
+    Description: ECS Security Group ID
+    Value: !Ref ECSSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-ECSSecurityGroupId'
+
+  OpenSearchSecurityGroupId:
+    Description: OpenSearch Security Group ID
+    Value: !Ref OpenSearchSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-OpenSearchSecurityGroupId'
+
+  LambdaSecurityGroupId:
+    Description: Lambda Security Group ID
+    Value: !Ref LambdaSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaSecurityGroupId'
+
+  ECSClusterArn:
+    Description: ECS Cluster ARN
+    Value: !GetAtt ECSCluster.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-ECSClusterArn'
+
+  VideoPreprocessingTaskDefinitionArn:
+    Description: Video Preprocessing Task Definition ARN
+    Value: !Ref VideoPreprocessingTaskDefinition
+    Export:
+      Name: !Sub '${AWS::StackName}-VideoPreprocessingTaskDefinitionArn'
+
+  SearchSimilarVideosTaskDefinitionArn:
+    Description: Search Similar Videos Task Definition ARN
+    Value: !Ref SearchSimilarVideosTaskDefinition
+    Export:
+      Name: !Sub '${AWS::StackName}-SearchSimilarVideosTaskDefinitionArn'
+
+  ALBDNSName:
+    Description: Application Load Balancer DNS Name
+    Value: !GetAtt ApplicationLoadBalancer.DNSName
+    Export:
+      Name: !Sub '${AWS::StackName}-ALBDNSName'
+
+  TargetGroupArn:
+    Description: Target Group ARN
+    Value: !Ref TargetGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-TargetGroupArn'
+
+  InvokeBedrockMarengoFunctionArn:
+    Description: Invoke Bedrock Marengo Lambda Function ARN
+    Value: !GetAtt InvokeBedrockMarengoFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-InvokeBedrockMarengoFunctionArn'
+
+  StoreEmbeddingsFunctionArn:
+    Description: Store Embeddings Lambda Function ARN
+    Value: !GetAtt StoreEmbeddingsFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-StoreEmbeddingsFunctionArn'
+
+  InvokeStepFunctionFunctionArn:
+    Description: Invoke Step Function Lambda Function ARN
+    Value: !GetAtt InvokeStepFunctionFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-InvokeStepFunctionFunctionArn'
+
+  CreateSnapshotFunctionArn:
+    Description: Create Snapshot Lambda Function ARN
+    Value: !GetAtt CreateSnapshotFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-CreateSnapshotFunctionArn'
+
+  OpenSearchDomainEndpoint:
+    Description: OpenSearch Domain Endpoint
+    Value: !Sub 'https://${OpenSearchDomain.DomainEndpoint}'
+    Export:
+      Name: !Sub '${AWS::StackName}-OpenSearchDomainEndpoint'
+
+  OpenSearchDomainArn:
+    Description: OpenSearch Domain ARN
+    Value: !GetAtt OpenSearchDomain.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-OpenSearchDomainArn'
+
+  VideoProcessingStateMachineArn:
+    Description: Video Processing State Machine ARN
+    Value: !Ref VideoProcessingStateMachine
+    Export:
+      Name: !Sub '${AWS::StackName}-VideoProcessingStateMachineArn'
+
+  ECSServiceName:
+    Description: ECS Service Name
+    Value: !GetAtt ECSService.Name
+    Export:
+      Name: !Sub '${AWS::StackName}-ECSServiceName'
