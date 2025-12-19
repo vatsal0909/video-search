@@ -10,33 +10,34 @@ Description: |
   - All IAM roles follow least-privilege principle with app-scoped OpenSearch roles.
   - Custom resource Lambda configures OpenSearch FGAC role mappings during stack creation.
   - REQUIRED: Lambda layer ZIP files must exist in S3 before deployment:
-    * s3://condenast-fe/lambda-artifacts/opensearch-query-dependencies-2fb22b80-caf2-4d3f-84a6-3f863bf3c409.zip
-    * s3://condenast-fe/lambda-artifacts/ffmpeg-video-processing-dependencies-697fac5e-fb3f-4814-b610-f0d2d3812616.zip
+    * s3://{env}-aihouse-dist-{AccountId}/lambda-artifacts/opensearch-query-dependencies-2fb22b80-caf2-4d3f-84a6-3f863bf3c409.zip
+    * s3://{env}-aihouse-dist-{AccountId}/lambda-artifacts/ffmpeg-video-processing-dependencies-697fac5e-fb3f-4814-b610-f0d2d3812616.zip
 
 Parameters:
+  env:
+    Type: String
+    Default: 'local'
+    AllowedValues: ['local', 'dev', 'staging', 'prod']
+    Description: 'Environment name for resource naming (local, dev, staging, prod)'
   StackPrefix:
     Type: String
-    Default: 'video-search-v1'
-    Description: 'Prefix for all resource names to avoid collisions'
+    Default: 'vs-1'
+    Description: 'Prefix for all resource names to avoid collisions (Max. - 8 characters)'
     AllowedPattern: '[a-zA-Z0-9-]+'
-    MaxLength: 20
-  AccountId:
-    Type: String
-    Default: '943143228843'
-  Region:
-    Type: String
-    Default: 'us-east-1'
-  # ============ FRONTEND CONFIGURATION PARAMETER ============
-  FrontendS3Bucket:
-    Type: String
-    Default: 'condenast-fe'
-    Description: S3 bucket where frontend static site is hosted
+    MaxLength: 8
+
+Mappings:
+  BucketNames:
+    Video:
+      BaseName: 'videos'
+    Frontend:
+      BaseName: 'aihouse-dist'
 
 Resources:
   ECSTaskExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${StackPrefix}-ecs-task-execution-role'
+      RoleName: !Sub '${StackPrefix}-${env}-ecs-task-execution-role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -66,13 +67,13 @@ Resources:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                 Resource:
-                  - !Sub 'arn:aws:logs:us-east-1:943143228843:log-group:/ecs/${StackPrefix}-video-preprocessing:*'
-                  - !Sub 'arn:aws:logs:us-east-1:943143228843:log-group:/ecs/${StackPrefix}-search-similar-videos-task:*'
+                  - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/ecs/${StackPrefix}-${env}-video-preprocessing:*'
+                  - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/ecs/${StackPrefix}-${env}-search-similar-videos-task:*'
 
   ECSTaskRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${StackPrefix}-ecs-task-role'
+      RoleName: !Sub '${StackPrefix}-${env}-ecs-task-role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -88,17 +89,22 @@ Resources:
               - Effect: Allow
                 Action:
                   - s3:GetObject
-                Resource: arn:aws:s3:::condenast-landingzone-useast1-943143228843-dev/*
+                Resource: !Sub 
+                  - 'arn:aws:s3:::${VideoBucket}-${AWS::Region}-${AWS::AccountId}-${env}/*'
+                  - VideoBucket: !FindInMap [BucketNames, Video, BaseName]
               - Effect: Allow
                 Action:
                   - s3:PutObject
-                Resource: arn:aws:s3:::condenast-raw-useast1-943143228843-dev/*
+                Resource: !Sub 
+                  - 'arn:aws:s3:::${VideoBucket}-${AWS::Region}-${AWS::AccountId}-${env}/*'
+                  - VideoBucket: !FindInMap [BucketNames, Video, BaseName]
               - Effect: Allow
                 Action:
                   - s3:ListBucket
                 Resource:
-                  - arn:aws:s3:::condenast-landingzone-useast1-943143228843-dev
-                  - arn:aws:s3:::condenast-raw-useast1-943143228843-dev
+                  - !Sub 
+                    - 'arn:aws:s3:::${VideoBucket}-${AWS::Region}-${AWS::AccountId}-${env}'
+                    - VideoBucket: !FindInMap [BucketNames, Video, BaseName]
         - PolicyName: StepFunctionsAccess
           PolicyDocument:
             Version: '2012-10-17'
@@ -112,7 +118,7 @@ Resources:
   SearchSimilarVideosTaskRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${StackPrefix}-search-similar-videos-ecs-task-role'
+      RoleName: !Sub '${StackPrefix}-${env}-search-similar-videos-ecs-task-role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -134,7 +140,7 @@ Resources:
                   - es:ESHttpDelete
                   - es:ESHttpHead
                 Resource:
-                  - !Sub 'arn:aws:es:${Region}:${AccountId}:domain/${StackPrefix}-aos-domain/*'
+                  - !Sub 'arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/${StackPrefix}-${env}-aos/*'
         - PolicyName: BedrockInvokeModel
           PolicyDocument:
             Version: '2012-10-17'
@@ -145,18 +151,18 @@ Resources:
                   - bedrock:InvokeModel
                   - bedrock:InvokeModelWithResponseStream
                 Resource:
-                  - arn:aws:bedrock:us-east-1:943143228843:inference-profile/*
-                  - arn:aws:bedrock:us-east-1::foundation-model/us.twelvelabs.marengo-embed-2-7-v1:0
-                  - arn:aws:bedrock:us-east-1::foundation-model/twelvelabs.marengo-embed-2-7-v1:0
+                  - !Sub 'arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/*'
+                  - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/us.twelvelabs.marengo-embed-2-7-v1:0'
+                  - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/twelvelabs.marengo-embed-2-7-v1:0'
                   - arn:aws:bedrock:us-east-2::foundation-model/twelvelabs.marengo-embed-2-7-v1:0
                   - arn:aws:bedrock:us-west-2::foundation-model/twelvelabs.marengo-embed-2-7-v1:0
                   - arn:aws:bedrock:us-west-1::foundation-model/twelvelabs.marengo-embed-2-7-v1:0
-                  - arn:aws:bedrock:us-east-1::foundation-model/us.twelvelabs.marengo-embed-3-0-v1:0
-                  - arn:aws:bedrock:us-east-1::foundation-model/twelvelabs.marengo-embed-3-0-v1:0
+                  - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/us.twelvelabs.marengo-embed-3-0-v1:0'
+                  - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/twelvelabs.marengo-embed-3-0-v1:0'
                   - arn:aws:bedrock:us-east-2::foundation-model/twelvelabs.marengo-embed-3-0-v1:0
                   - arn:aws:bedrock:us-west-2::foundation-model/twelvelabs.marengo-embed-3-0-v1:0
                   - arn:aws:bedrock:us-west-1::foundation-model/twelvelabs.marengo-embed-3-0-v1:0
-                  - arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-micro-v1:0
+                  - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/amazon.nova-micro-v1:0'
         - PolicyName: S3ReadAccess
           PolicyDocument:
             Version: '2012-10-17'
@@ -169,12 +175,12 @@ Resources:
                   - s3:ListBucket
                   - s3:PutObject
                 Resource:
-                  - arn:aws:s3:::condenast-raw-useast1-943143228843-dev
-                  - arn:aws:s3:::condenast-raw-useast1-943143228843-dev/*
-                  - arn:aws:s3:::condenast-processed-useast1-943143228843-dev
-                  - arn:aws:s3:::condenast-processed-useast1-943143228843-dev/*
-                  - arn:aws:s3:::condenast-landingzone-useast1-943143228843-dev
-                  - arn:aws:s3:::condenast-landingzone-useast1-943143228843-dev/*
+                  - !Sub 
+                    - 'arn:aws:s3:::${VideoBucket}-${AWS::Region}-${AWS::AccountId}-${env}'
+                    - VideoBucket: !FindInMap [BucketNames, Video, BaseName]
+                  - !Sub 
+                    - 'arn:aws:s3:::${VideoBucket}-${AWS::Region}-${AWS::AccountId}-${env}/*'
+                    - VideoBucket: !FindInMap [BucketNames, Video, BaseName]
         - PolicyName: SSMMessagesAccess
           PolicyDocument:
             Version: '2012-10-17'
@@ -190,7 +196,7 @@ Resources:
   InvokeBedrockMarengoRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${StackPrefix}-invoke-bedrock-marengo-role'
+      RoleName: !Sub '${StackPrefix}-${env}-invoke-bedrock-marengo-role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -207,12 +213,12 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: logs:CreateLogGroup
-                Resource: arn:aws:logs:us-east-1:943143228843:*
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*'
               - Effect: Allow
                 Action:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
-                Resource: !Sub 'arn:aws:logs:us-east-1:943143228843:log-group:/aws/lambda/${StackPrefix}-invoke-bedrock-marengo:*'
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${StackPrefix}-${env}-invoke-bedrock-marengo:*'
         - PolicyName: S3Access
           PolicyDocument:
             Version: '2012-10-17'
@@ -223,10 +229,12 @@ Resources:
                   - s3:PutObject
                   - s3:ListBucket
                 Resource:
-                  - arn:aws:s3:::condenast-raw-useast1-943143228843-dev/*
-                  - arn:aws:s3:::condenast-raw-useast1-943143228843-dev
-                  - arn:aws:s3:::condenast-processed-useast1-943143228843-dev/*
-                  - arn:aws:s3:::condenast-processed-useast1-943143228843-dev
+                  - !Sub 
+                    - 'arn:aws:s3:::${VideoBucket}-${AWS::Region}-${AWS::AccountId}-${env}/*'
+                    - VideoBucket: !FindInMap [BucketNames, Video, BaseName]
+                  - !Sub 
+                    - 'arn:aws:s3:::${VideoBucket}-${AWS::Region}-${AWS::AccountId}-${env}'
+                    - VideoBucket: !FindInMap [BucketNames, Video, BaseName]
         - PolicyName: BedrockAccess
           PolicyDocument:
             Version: '2012-10-17'
@@ -237,23 +245,23 @@ Resources:
                   - bedrock:InvokeModelWithResponseStream
                   - bedrock:GetAsyncInvoke
                 Resource:
-                  - arn:aws:bedrock:us-east-1:943143228843:async-invoke/*
-                  - arn:aws:bedrock:us-east-1::foundation-model/twelvelabs.marengo-embed-2-7-v1:0
-                  - arn:aws:bedrock:us-east-1:943143228843:inference-profile/*
-                  - arn:aws:bedrock:us-east-1:943143228843:model-invocation-job/*
+                  - !Sub 'arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:async-invoke/*'
+                  - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/twelvelabs.marengo-embed-2-7-v1:0'
+                  - !Sub 'arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/*'
+                  - !Sub 'arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:model-invocation-job/*'
               - Effect: Allow
                 Action:
                   - bedrock:InvokeModel
                   - bedrock:InvokeModelWithResponseStream
                   - bedrock:GetAsyncInvoke
                 Resource:
-                  - arn:aws:bedrock:us-east-1:943143228843:async-invoke/*
-                  - arn:aws:bedrock:us-east-1::foundation-model/twelvelabs.marengo-embed-3-0-v1:0
-                  - arn:aws:bedrock:us-east-1:943143228843:inference-profile/*
-                  - arn:aws:bedrock:us-east-1:943143228843:model-invocation-job/*
+                  - !Sub 'arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:async-invoke/*'
+                  - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/twelvelabs.marengo-embed-3-0-v1:0'
+                  - !Sub 'arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/*'
+                  - !Sub 'arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:model-invocation-job/*'
               - Effect: Allow
                 Action: iam:PassRole
-                Resource: !Sub 'arn:aws:iam::${AccountId}:role/${StackPrefix}-invoke-bedrock-marengo-role'
+                Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${StackPrefix}-${env}-invoke-bedrock-marengo-role'
                 Condition:
                   StringEquals:
                     iam:PassedToService: bedrock.amazonaws.com
@@ -266,7 +274,7 @@ Resources:
   InvokeVideoProcessingStepFunctionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${StackPrefix}-invoke-video-processing-step-function-role'
+      RoleName: !Sub '${StackPrefix}-${env}-invoke-video-processing-step-function-role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -283,24 +291,24 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: logs:CreateLogGroup
-                Resource: arn:aws:logs:us-east-1:943143228843:*
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*'
               - Effect: Allow
                 Action:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
-                Resource: !Sub 'arn:aws:logs:us-east-1:943143228843:log-group:/aws/lambda/${StackPrefix}-invoke-video-processing-step-function:*'
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${StackPrefix}-${env}-invoke-video-processing-step-function:*'
         - PolicyName: StepFunctionsAccess
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action: states:StartExecution
-                Resource: !Sub 'arn:aws:states:${Region}:${AccountId}:stateMachine:${StackPrefix}-pipeline'
+                Resource: !Sub 'arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${StackPrefix}-${env}-pipeline'
 
   OpenSearchSnapshotRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${StackPrefix}-opensearch-snapshot-role'
+      RoleName: !Sub '${StackPrefix}-${env}-opensearch-snapshot-role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -317,19 +325,23 @@ Resources:
                   - s3:ListBucket
                 Effect: Allow
                 Resource:
-                  - arn:aws:s3:::condenast-fe
+                  - !Sub 
+                    - 'arn:aws:s3:::${env}-${FrontendBucket}-${AWS::AccountId}'
+                    - FrontendBucket: !FindInMap [BucketNames, Frontend, BaseName]
               - Action:
                   - s3:GetObject
                   - s3:PutObject
                   - s3:DeleteObject
                 Effect: Allow
                 Resource:
-                  - arn:aws:s3:::condenast-fe/*
+                  - !Sub 
+                    - 'arn:aws:s3:::${env}-${FrontendBucket}-${AWS::AccountId}/*'
+                    - FrontendBucket: !FindInMap [BucketNames, Frontend, BaseName]
 
   CreateSnapshotLambdaRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${StackPrefix}-create-opensearch-snapshot-lambda-role'
+      RoleName: !Sub '${StackPrefix}-${env}-create-opensearch-snapshot-lambda-role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -346,12 +358,12 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: logs:CreateLogGroup
-                Resource: arn:aws:logs:us-east-1:943143228843:*
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*'
               - Effect: Allow
                 Action:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
-                Resource: !Sub 'arn:aws:logs:us-east-1:943143228843:log-group:/aws/lambda/${StackPrefix}-create-opensearch-snapshot:*'
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${StackPrefix}-${env}-create-opensearch-snapshot:*'
         - PolicyName: OpenSearchAccess
           PolicyDocument:
             Version: '2012-10-17'
@@ -360,7 +372,7 @@ Resources:
                 Action:
                   - es:ESHttpPut
                   - es:ESHttpGet
-                Resource: !Sub 'arn:aws:es:${Region}:${AccountId}:domain/${StackPrefix}-aos-domain/*'
+                Resource: !Sub 'arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/${StackPrefix}-${env}-aos/*'
               - Effect: Allow
                 Action: iam:PassRole
                 Resource: !GetAtt OpenSearchSnapshotRole.Arn
@@ -368,7 +380,7 @@ Resources:
   StoreEmbeddingsLambdaRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${StackPrefix}-store-embeddings-opensearch-lambda-role'
+      RoleName: !Sub '${StackPrefix}-${env}-store-embeddings-opensearch-lambda-role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -385,12 +397,12 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: logs:CreateLogGroup
-                Resource: arn:aws:logs:us-east-1:943143228843:*
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*'
               - Effect: Allow
                 Action:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
-                Resource: !Sub 'arn:aws:logs:us-east-1:943143228843:log-group:/aws/lambda/${StackPrefix}-store-embeddings-opensearch:*'
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${StackPrefix}-${env}-store-embeddings-opensearch:*'
         - PolicyName: S3Access
           PolicyDocument:
             Version: '2012-10-17'
@@ -401,10 +413,12 @@ Resources:
                   - s3:ListBucket
                   - s3:PutObject
                 Resource:
-                  - arn:aws:s3:::condenast-processed-useast1-943143228843-dev/*
-                  - arn:aws:s3:::condenast-processed-useast1-943143228843-dev
-                  - arn:aws:s3:::condenast-raw-useast1-943143228843-dev/*
-                  - arn:aws:s3:::condenast-raw-useast1-943143228843-dev
+                  - !Sub 
+                    - 'arn:aws:s3:::${VideoBucket}-${AWS::Region}-${AWS::AccountId}-${env}/*'
+                    - VideoBucket: !FindInMap [BucketNames, Video, BaseName]
+                  - !Sub 
+                    - 'arn:aws:s3:::${VideoBucket}-${AWS::Region}-${AWS::AccountId}-${env}'
+                    - VideoBucket: !FindInMap [BucketNames, Video, BaseName]
         - PolicyName: EC2NetworkInterface
           PolicyDocument:
             Version: '2012-10-17'
@@ -427,7 +441,7 @@ Resources:
                   - es:ESHttpDelete
                   - es:ESHttpHead
                 Resource:
-                  - !Sub 'arn:aws:es:${Region}:${AccountId}:domain/${StackPrefix}-aos-domain/*'
+                  - !Sub 'arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/${StackPrefix}-${env}-aos/*'
         - PolicyName: AOSSAccess
           PolicyDocument:
             Version: '2012-10-17'
@@ -436,13 +450,13 @@ Resources:
                 Action:
                   - aoss:APIAccessAll
                 Resource:
-                  - arn:aws:aoss:us-east-1:943143228843:collection/*
-                  - arn:aws:aoss:us-east-1:943143228843:collection/10hkpuukzb763aqe0uhi
+                  - !Sub 'arn:aws:aoss:${AWS::Region}:${AWS::AccountId}:collection/*'
+                  - !Sub 'arn:aws:aoss:${AWS::Region}:${AWS::AccountId}:collection/10hkpuukzb763aqe0uhi'
 
   StepFunctionsExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${StackPrefix}-complete-video-processing-pipeline-role'
+      RoleName: !Sub '${StackPrefix}-${env}-complete-video-processing-pipeline-role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -459,7 +473,7 @@ Resources:
                 Action:
                   - bedrock:GetAsyncInvoke
                 Resource:
-                  - arn:aws:bedrock:us-east-1:943143228843:async-invoke/*
+                  - !Sub 'arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:async-invoke/*'
         - PolicyName: IAMPassRole
           PolicyDocument:
             Version: '2012-10-17'
@@ -476,8 +490,8 @@ Resources:
               - Effect: Allow
                 Action: lambda:InvokeFunction
                 Resource:
-                  - !Sub 'arn:aws:lambda:us-east-1:943143228843:function:${StackPrefix}-invoke-bedrock-marengo'
-                  - !Sub 'arn:aws:lambda:us-east-1:943143228843:function:${StackPrefix}-store-embeddings-opensearch'
+                  - !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${StackPrefix}-${env}-invoke-bedrock-marengo'
+                  - !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${StackPrefix}-${env}-store-embeddings-opensearch'
         - PolicyName: ECSRunTask
           PolicyDocument:
             Version: '2012-10-17'
@@ -498,7 +512,7 @@ Resources:
                   - events:PutRule
                   - events:DescribeRule
                 Resource:
-                  - arn:aws:events:us-east-1:943143228843:rule/StepFunctionsGetEventsForECSTaskRule
+                  - !Sub 'arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/StepFunctionsGetEventsForECSTaskRule'
         - PolicyName: XRayAccess
           PolicyDocument:
             Version: '2012-10-17'
@@ -515,7 +529,7 @@ Resources:
   UpdateFrontendConfigLambdaRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${StackPrefix}-update-frontend-config-role'
+      RoleName: !Sub '${StackPrefix}-${env}-update-frontend-config-role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -536,12 +550,16 @@ Resources:
                   - s3:PutObjectAcl
                   - s3:GetObject
                 Resource:
-                  - !Sub 'arn:aws:s3:::${FrontendS3Bucket}/*'
+                  - !Sub 
+                    - 'arn:aws:s3:::${env}-${FrontendBucket}-${AWS::AccountId}/*'
+                    - FrontendBucket: !FindInMap [BucketNames, Frontend, BaseName]
               - Effect: Allow
                 Action:
                   - s3:ListBucket
                 Resource:
-                  - !Sub 'arn:aws:s3:::${FrontendS3Bucket}'
+                  - !Sub 
+                    - 'arn:aws:s3:::${env}-${FrontendBucket}-${AWS::AccountId}'
+                    - FrontendBucket: !FindInMap [BucketNames, Frontend, BaseName]
   VPC:
     Type: AWS::EC2::VPC
     Properties:
@@ -758,7 +776,7 @@ Resources:
     Type: AWS::EC2::VPCEndpoint
     Properties:
       VpcId: !Ref VPC
-      ServiceName: !Sub 'com.amazonaws.${Region}.s3'
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
       RouteTableIds:
         - !Ref PrivateRouteTable
 
@@ -767,7 +785,7 @@ Resources:
     Properties:
       VpcId: !Ref VPC
       VpcEndpointType: Interface
-      ServiceName: !Sub 'com.amazonaws.${Region}.ecr.api'
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ecr.api'
       SubnetIds:
         - !Ref PrivateSubnet1
         - !Ref PrivateSubnet2
@@ -780,7 +798,7 @@ Resources:
     Properties:
       VpcId: !Ref VPC
       VpcEndpointType: Interface
-      ServiceName: !Sub 'com.amazonaws.${Region}.ecr.dkr'
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ecr.dkr'
       SubnetIds:
         - !Ref PrivateSubnet1
         - !Ref PrivateSubnet2
@@ -793,7 +811,7 @@ Resources:
     Properties:
       VpcId: !Ref VPC
       VpcEndpointType: Interface
-      ServiceName: !Sub 'com.amazonaws.${Region}.bedrock'
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.bedrock'
       SubnetIds:
         - !Ref PrivateSubnet1
         - !Ref PrivateSubnet2
@@ -806,7 +824,7 @@ Resources:
     Properties:
       VpcId: !Ref VPC
       VpcEndpointType: Interface
-      ServiceName: !Sub 'com.amazonaws.${Region}.bedrock-runtime'
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.bedrock-runtime'
       SubnetIds:
         - !Ref PrivateSubnet1
         - !Ref PrivateSubnet2
@@ -819,7 +837,7 @@ Resources:
     Properties:
       VpcId: !Ref VPC
       VpcEndpointType: Interface
-      ServiceName: !Sub 'com.amazonaws.${Region}.states'
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.states'
       SubnetIds:
         - !Ref PrivateSubnet1
         - !Ref PrivateSubnet2
@@ -832,7 +850,7 @@ Resources:
     Properties:
       VpcId: !Ref VPC
       VpcEndpointType: Interface
-      ServiceName: !Sub 'com.amazonaws.${Region}.sts'
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.sts'
       SubnetIds:
         - !Ref PrivateSubnet1
         - !Ref PrivateSubnet2
@@ -843,7 +861,7 @@ Resources:
   OpenSearchRoleMappingLambdaRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${StackPrefix}-opensearch-role-mapper-role'
+      RoleName: !Sub '${StackPrefix}-${env}-opensearch-role-mapper-role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -860,19 +878,19 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: sts:AssumeRole
-                Resource: !Sub 'arn:aws:iam::${AccountId}:role/${StackPrefix}-opensearch-admin'
+                Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${StackPrefix}-${env}-opensearch-admin'
 
   OpenSearchAdminRole:
     Type: AWS::IAM::Role
     DependsOn: OpenSearchRoleMappingLambdaRole
     Properties:
-      RoleName: !Sub '${StackPrefix}-opensearch-admin'
+      RoleName: !Sub '${StackPrefix}-${env}-opensearch-admin'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
             Principal:
-              AWS: !Sub 'arn:aws:iam::${AccountId}:root'
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
             Action: sts:AssumeRole
           - Effect: Allow
             Principal:
@@ -893,13 +911,13 @@ Resources:
                   - es:ESHttpHead
                   - es:DescribeDomain
                 Resource:
-                  - !Sub 'arn:aws:es:${Region}:${AccountId}:domain/${StackPrefix}-aos-domain'
-                  - !Sub 'arn:aws:es:${Region}:${AccountId}:domain/${StackPrefix}-aos-domain/*'
+                  - !Sub 'arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/${StackPrefix}-${env}-aos'
+                  - !Sub 'arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/${StackPrefix}-${env}-aos/*'
 
   OpenSearchDomain:
     Type: AWS::OpenSearchService::Domain
     Properties:
-      DomainName: !Sub '${StackPrefix}-aos-domain'
+      DomainName: !Sub '${StackPrefix}-${env}-aos'
       EngineVersion: OpenSearch_3.3
       ClusterConfig:
         InstanceType: r8g.large.search
@@ -933,19 +951,19 @@ Resources:
                 - !GetAtt StoreEmbeddingsLambdaRole.Arn
                 - !GetAtt CreateSnapshotLambdaRole.Arn
                 - !GetAtt OpenSearchAdminRole.Arn
-                - !Sub 'arn:aws:iam::${AccountId}:root'
+                - !Sub 'arn:aws:iam::${AWS::AccountId}:root'
             Action:
               - es:ESHttpGet
               - es:ESHttpPost
               - es:ESHttpPut
               - es:ESHttpDelete
               - es:ESHttpHead
-            Resource: !Sub 'arn:aws:es:${Region}:${AccountId}:domain/${StackPrefix}-aos-domain/*'
+            Resource: !Sub 'arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/${StackPrefix}-${env}-aos/*'
 
   ECSCluster:
     Type: AWS::ECS::Cluster
     Properties:
-      ClusterName: !Sub '${StackPrefix}-cluster'
+      ClusterName: !Sub '${StackPrefix}-${env}-cluster'
       ClusterSettings:
         - Name: containerInsights
           Value: enabled
@@ -953,7 +971,7 @@ Resources:
   VideoPreprocessingTaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
-      Family: !Sub '${StackPrefix}-video-preprocessing-task'
+      Family: !Sub '${StackPrefix}-${env}-video-preprocessing-task'
       RequiresCompatibilities:
         - FARGATE
       NetworkMode: awsvpc
@@ -962,14 +980,14 @@ Resources:
       ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
       TaskRoleArn: !GetAtt ECSTaskRole.Arn
       ContainerDefinitions:
-        - Name: !Sub '${StackPrefix}-video-preprocessor'
-          Image: !Sub '${AccountId}.dkr.ecr.${Region}.amazonaws.com/video-preprocessing:latest'
+        - Name: !Sub '${StackPrefix}-${env}-video-preprocessor'
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/video-preprocessing:latest'
           Essential: true
           LogConfiguration:
             LogDriver: awslogs
             Options:
-              awslogs-group: !Sub '/ecs/${StackPrefix}-video-preprocessing'
-              awslogs-region: !Ref Region
+              awslogs-group: !Sub '/ecs/${StackPrefix}-${env}-video-preprocessing'
+              awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: ecs
               awslogs-create-group: 'true'
 
@@ -981,7 +999,7 @@ Resources:
       - ECRDKRVPCEndpoint
       - S3VPCEndpoint
     Properties:
-      Family: !Sub '${StackPrefix}-search-similar-videos-task'
+      Family: !Sub '${StackPrefix}-${env}-search-similar-videos-task'
       RequiresCompatibilities:
         - FARGATE
       NetworkMode: awsvpc
@@ -993,8 +1011,8 @@ Resources:
         CpuArchitecture: X86_64
         OperatingSystemFamily: LINUX
       ContainerDefinitions:
-        - Name: !Sub '${StackPrefix}-search-similar-videos-container'
-          Image: !Sub '${AccountId}.dkr.ecr.${Region}.amazonaws.com/condenast/search-similar-videos:latest'
+        - Name: !Sub '${StackPrefix}-${env}-search-similar-videos-container'
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/condenast/search-similar-videos:latest'
           Essential: true
           PortMappings:
             - ContainerPort: 8000
@@ -1003,25 +1021,27 @@ Resources:
               AppProtocol: http
           Environment:
             - Name: AWS_REGION
-              Value: !Ref Region
+              Value: !Ref AWS::Region
             - Name: OPENSEARCH_CLUSTER_HOST
               Value: !Sub 'https://${OpenSearchDomain.DomainEndpoint}'
             - Name: AWS_S3_BUCKET
-              Value: !Sub 'condenast-landingzone-useast1-${AccountId}-dev'
+              Value: !Sub 
+                - '${VideoBucket}-${AWS::Region}-${AWS::AccountId}-${env}'
+                - VideoBucket: !FindInMap [BucketNames, Video, BaseName]
             - Name: PORT
               Value: '8000'
           LogConfiguration:
             LogDriver: awslogs
             Options:
-              awslogs-group: !Sub '/ecs/${StackPrefix}-search-similar-videos-task'
-              awslogs-region: !Ref Region
+              awslogs-group: !Sub '/ecs/${StackPrefix}-${env}-search-similar-videos-task'
+              awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: ecs
               awslogs-create-group: 'true'
 
   ApplicationLoadBalancer:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
-      Name: !Sub '${StackPrefix}-alb'
+      Name: !Sub '${StackPrefix}-${env}-alb'
       Scheme: internet-facing
       Type: application
       Subnets:
@@ -1033,7 +1053,7 @@ Resources:
   TargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
-      Name: !Sub '${StackPrefix}-tg'
+      Name: !Sub '${StackPrefix}-${env}-tg'
       Protocol: HTTP
       Port: 8000
       TargetType: ip
@@ -1061,7 +1081,7 @@ Resources:
       - ALBListener
       - OpenSearchRoleMappingCustomResource
     Properties:
-      ServiceName: !Sub '${StackPrefix}-service'
+      ServiceName: !Sub '${StackPrefix}-${env}-service'
       Cluster: !Ref ECSCluster
       TaskDefinition: !Ref SearchSimilarVideosTaskDefinition
       DesiredCount: 1
@@ -1075,7 +1095,7 @@ Resources:
             - !Ref ECSSecurityGroup
           AssignPublicIp: DISABLED
       LoadBalancers:
-        - ContainerName: !Sub '${StackPrefix}-search-similar-videos-container'
+        - ContainerName: !Sub '${StackPrefix}-${env}-search-similar-videos-container'
           ContainerPort: 8000
           TargetGroupArn: !Ref TargetGroup
       HealthCheckGracePeriodSeconds: 60
@@ -1088,12 +1108,12 @@ Resources:
       ResourceId: !Sub 'service/${ECSCluster}/${ECSService.Name}'
       ScalableDimension: ecs:service:DesiredCount
       ServiceNamespace: ecs
-      RoleARN: !Sub 'arn:aws:iam::${AccountId}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService'
+      RoleARN: !Sub 'arn:aws:iam::${AWS::AccountId}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService'
 
   AutoScalingPolicy:
     Type: AWS::ApplicationAutoScaling::ScalingPolicy
     Properties:
-      PolicyName: !Sub '${StackPrefix}-scaling-policy'
+      PolicyName: !Sub '${StackPrefix}-${env}-scaling-policy'
       PolicyType: TargetTrackingScaling
       ScalingTargetId: !Ref AutoScalingTarget
       TargetTrackingScalingPolicyConfiguration:
@@ -1107,7 +1127,7 @@ Resources:
   InvokeBedrockMarengoFunction:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: !Sub '${StackPrefix}-invoke-bedrock-marengo'
+      FunctionName: !Sub '${StackPrefix}-${env}-invoke-bedrock-marengo'
       Runtime: python3.13
       Handler: index.lambda_handler
       Timeout: 300
@@ -1115,7 +1135,10 @@ Resources:
       Role: !GetAtt InvokeBedrockMarengoRole.Arn
       Environment:
         Variables:
-          AWS_BUCKET_OWNER: !Ref AccountId
+          AWS_BUCKET_OWNER: !Ref AWS::AccountId
+          VIDEO_BUCKET: !Sub 
+            - '${VideoBucket}-${AWS::Region}-${AWS::AccountId}-${env}'
+            - VideoBucket: !FindInMap [BucketNames, Video, BaseName]
       VpcConfig:
         SubnetIds:
           - !Ref PrivateSubnet1
@@ -1127,14 +1150,14 @@ Resources:
           import json
           import boto3
           import os
-          bedrock_runtime = boto3.client('bedrock-runtime', region_name='us-east-1')
+          bedrock_runtime = boto3.client('bedrock-runtime', region_name=os.environ.get('AWS_DEFAULT_REGION', 'us-east-1'))
           def lambda_handler(event, context):
               bucket = event['bucket']
               key = event['key']
               part = event['part']
               MARENGO_MODEL_VERSION = 3
               print(f"Processing {key} in bucket {bucket}")
-              dst_bucket = 'condenast-processed-useast1-943143228843-dev'
+              video_bucket = os.environ['VIDEO_BUCKET']
               if MARENGO_MODEL_VERSION == 3:
                   modelId = 'twelvelabs.marengo-embed-3-0-v1:0'
                   request_body = {
@@ -1163,9 +1186,9 @@ Resources:
                       "embeddingOption": ["visual-text", "audio", "visual-image"]
                   }
               if MARENGO_MODEL_VERSION == 3:
-                  outputS3uri = f"s3://{dst_bucket}/embeddings-marengo-3/{key}/"
+                  outputS3uri = f"s3://{video_bucket}/embeddings-marengo-3/{key}/"
               else:
-                  outputS3uri = f"s3://{dst_bucket}/embeddings/{key}/"
+                  outputS3uri = f"s3://{video_bucket}/embeddings/{key}/"
               response = bedrock_runtime.start_async_invoke(
                   modelId=modelId,
                   modelInput=request_body,
@@ -1182,22 +1205,26 @@ Resources:
   OpenSearchDependenciesLayer:
     Type: AWS::Lambda::LayerVersion
     Properties:
-      LayerName: !Sub '${StackPrefix}-opensearch-dependencies'
+      LayerName: !Sub '${StackPrefix}-${env}-opensearch-dependencies'
       CompatibleRuntimes:
         - python3.13
       Content:
-        S3Bucket: condenast-fe
-        S3Key: lambda-artifacts/opensearch-query-dependencies-2fb22b80-caf2-4d3f-84a6-3f863bf3c409.zip
+        S3Bucket: !Sub 
+          - '${env}-${FrontendBucket}-${AWS::AccountId}'
+          - FrontendBucket: !FindInMap [BucketNames, Frontend, BaseName]
+        S3Key: demo-apps-assets/video-search-demo/lambda-artifacts/opensearch-query-dependencies-2fb22b80-caf2-4d3f-84a6-3f863bf3c409.zip
 
   FfmpegVideoProcessingDependenciesLayer:
     Type: AWS::Lambda::LayerVersion
     Properties:
-      LayerName: !Sub '${StackPrefix}-ffmpeg-video-processing-dependencies'
+      LayerName: !Sub '${StackPrefix}-${env}-ffmpeg-video-processing-dependencies'
       CompatibleRuntimes:
         - python3.13
       Content:
-        S3Bucket: condenast-fe
-        S3Key: lambda-artifacts/ffmpeg-video-processing-dependencies-697fac5e-fb3f-4814-b610-f0d2d3812616.zip
+        S3Bucket: !Sub 
+          - '${env}-${FrontendBucket}-${AWS::AccountId}'
+          - FrontendBucket: !FindInMap [BucketNames, Frontend, BaseName]
+        S3Key: demo-apps-assets/video-search-demo/lambda-artifacts/ffmpeg-video-processing-dependencies-697fac5e-fb3f-4814-b610-f0d2d3812616.zip
 
   StoreEmbeddingsFunction:
     Type: AWS::Lambda::Function
@@ -1205,10 +1232,10 @@ Resources:
       - OpenSearchDomain
       - OpenSearchRoleMappingCustomResource
     Properties:
-      FunctionName: !Sub '${StackPrefix}-store-embeddings-opensearch'
+      FunctionName: !Sub '${StackPrefix}-${env}-store-embeddings-opensearch'
       Runtime: python3.13
-      Handler: index.lambda_handler
-      Timeout: 300
+      Handler: store_embeddings.lambda_handler
+      Timeout: 900
       MemorySize: 512
       Role: !GetAtt StoreEmbeddingsLambdaRole.Arn
       Layers:
@@ -1224,108 +1251,17 @@ Resources:
         SecurityGroupIds:
           - !Ref LambdaSecurityGroup
       Code:
-        ZipFile: |
-          import json
-          import boto3
-          import os
-          import hashlib
-          from opensearchpy import OpenSearch, RequestsHttpConnection, AWSV4SignerAuth
-          import uuid
-          def lambda_handler(event, context):
-              try:
-                  output_s3_path = event['outputS3Path']
-                  part = event['part']
-                  original_video = event['originalVideo']
-                  video_id = str(uuid.uuid4())
-                  print(f"Processing embeddings for part {part}")
-                  print(f"Video ID: {video_id}")
-                  print(f"Output S3 path: {output_s3_path}")
-                  s3_client = boto3.client('s3', region_name='us-east-1')
-                  opensearch_client = get_opensearch_client()
-                  bucket, key = parse_s3_uri(output_s3_path)
-                  embeddings_data = download_embeddings_from_s3(s3_client, bucket, key)
-                  if not embeddings_data:
-                      raise ValueError("No embeddings data found in S3")
-                  print(f"Successfully downloaded embeddings for part {part}")
-                  indexed_count = index_embeddings_to_opensearch(opensearch_client, embeddings_data, video_id, original_video, part)
-                  print(f"Successfully indexed {indexed_count} embeddings for part {part}")
-                  return {'statusCode': 200, 'part': part, 'videoId': video_id, 'embeddingsIndexed': indexed_count, 'message': 'Successfully stored embeddings in OpenSearch'}
-              except Exception as e:
-                  print(f"Error storing embeddings: {str(e)}")
-                  import traceback
-                  traceback.print_exc()
-                  raise
-          def get_opensearch_client():
-              opensearch_host = os.environ['OPENSEARCH_CLUSTER_HOST']
-              opensearch_host = opensearch_host.replace('https://', '').replace('http://', '').strip()
-              session = boto3.Session()
-              credentials = session.get_credentials()
-              auth = AWSV4SignerAuth(credentials, 'us-east-1', 'es')
-              return OpenSearch(hosts=[{'host': opensearch_host, 'port': 443}], http_auth=auth, use_ssl=True, verify_certs=True, connection_class=RequestsHttpConnection, pool_maxsize=20)
-          def parse_s3_uri(s3_uri):
-              s3_parts = s3_uri.replace('s3://', '').split('/', 1)
-              bucket = s3_parts[0]
-              key = s3_parts[1] if len(s3_parts) > 1 else ''
-              return bucket, key
-          def download_embeddings_from_s3(s3_client, bucket, key_prefix):
-              possible_keys = [f"{key_prefix}/output.json"]
-              for key in possible_keys:
-                  try:
-                      print(f"Trying to read from s3://{bucket}/{key}")
-                      obj = s3_client.get_object(Bucket=bucket, Key=key)
-                      result = json.loads(obj['Body'].read().decode('utf-8'))
-                      print(f"Successfully read embeddings from S3")
-                      return result
-                  except s3_client.exceptions.NoSuchKey:
-                      continue
-                  except Exception as e:
-                      print(f"Error reading from S3 key {key}: {e}")
-                      continue
-              raise ValueError(f"Could not find embeddings output in S3 at {bucket}/{key_prefix}")
-          def generate_clip_id(video_id, start_time, end_time):
-              clip_string = f"{video_id}_{start_time:.2f}_{end_time:.2f}"
-              clip_hash = hashlib.sha256(clip_string.encode()).hexdigest()[:16]
-              return f"clip_{clip_hash}"
-          def validate_embedding(embedding, expected_dim=1024):
-              if not isinstance(embedding, list):
-                  return False, f"Embedding is not a list: {type(embedding)}"
-              if len(embedding) != expected_dim:
-                  return False, f"Embedding dimension mismatch: expected {expected_dim}, got {len(embedding)}"
-              for i, val in enumerate(embedding):
-                  if not isinstance(val, (int, float)):
-                      return False, f"Embedding contains non-numeric value at index {i}: {val}"
-                  if val != val:
-                      return False, f"Embedding contains NaN at index {i}"
-              return True, "Valid"
-          def index_embeddings_to_opensearch(opensearch_client, embeddings_data, video_id, original_video, part):
-              index_name = "video_clips"
-              indexed_count = 0
-              segments = embeddings_data.get('data', [])
-              print(f"Found {len(segments)} segments to index")
-              for idx, segment in enumerate(segments):
-                  try:
-                      embedding = segment.get('embedding', [])
-                      is_valid, validation_msg = validate_embedding(embedding)
-                      if not is_valid:
-                          print(f"Skipping segment {idx}: {validation_msg}")
-                          continue
-                      start_time = round(segment.get('startSec', 0), 2)
-                      end_time = round(segment.get('endSec', 0), 2)
-                      clip_id = generate_clip_id(video_id, start_time, end_time)
-                      doc = {'video_id': video_id, 'video_path': f"s3://{original_video['bucket']}/{original_video['key']}", 'clip_id': clip_id, 'part': part, 'segment_index': idx, 'timestamp_start': float(segment.get('startSec', 0)), 'timestamp_end': float(segment.get('endSec', 0)), 'clip_text': original_video['key'].split('/')[-1], 'embedding_scope': segment.get('embeddingOption', 'clip'), 'embedding': embedding}
-                      opensearch_client.index(index=index_name, body=doc)
-                      indexed_count += 1
-                      if indexed_count % 10 == 0:
-                          print(f"Indexed {indexed_count}/{len(segments)} segments")
-                  except Exception as e:
-                      print(f"Error indexing segment {idx}: {e}")
-                      continue
-              return indexed_count
+        S3Bucket: !Sub 
+          - '${env}-${FrontendBucket}-${AWS::AccountId}'
+          - FrontendBucket: !FindInMap [BucketNames, Frontend, BaseName]
+        S3Key: 'demo-apps-assets/video-search-demo/lambda-artifacts/store-embeddings-lambda.zip'
+      EphemeralStorage:
+        Size: 2048
 
   InvokeStepFunctionFunction:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: !Sub '${StackPrefix}-invoke-video-processing-step-function'
+      FunctionName: !Sub '${StackPrefix}-${env}-invoke-video-processing-step-function'
       Runtime: python3.13
       Handler: index.lambda_handler
       Timeout: 60
@@ -1334,6 +1270,9 @@ Resources:
       Environment:
         Variables:
           STATE_MACHINE_ARN: !Ref VideoProcessingStateMachine
+          VIDEO_BUCKET: !Sub 
+            - '${VideoBucket}-${AWS::Region}-${AWS::AccountId}-${env}'
+            - VideoBucket: !FindInMap [BucketNames, Video, BaseName]
       Code:
         ZipFile: |
           import json
@@ -1347,7 +1286,7 @@ Resources:
               for record in event['Records']:
                   bucket = record['s3']['bucket']['name']
                   key = unquote_plus(record['s3']['object']['key'])
-                  dst_bucket = 'condenast-raw-useast1-943143228843-dev'
+                  VIDEO_BUCKET = os.environ['VIDEO_BUCKET']
                   timestamp = str(datetime.now().strftime('%m-%d-%Y_%H-%M-%S'))
                   if not key.lower().endswith(('.mp4', '.mov', '.avi')):
                       print(f"Skipping non-video file: {key}")
@@ -1356,7 +1295,7 @@ Resources:
                       "detail": {
                           "bucket": {"name": bucket},
                           "object": {"key": key},
-                          "dst_bucket": {"key": dst_bucket}
+                          "dst_bucket": {"key": VIDEO_BUCKET}
                       }
                   }
                   try:
@@ -1372,23 +1311,47 @@ Resources:
               return {'statusCode': 200, 'body': json.dumps('Step Functions triggered successfully')}
 
   # ============ S3 BUCKET IMPORT AND EVENT NOTIFICATION ============
-  LandingZoneBucket:
+  VideoBucket:
     Type: AWS::S3::Bucket
     DeletionPolicy: Delete
     DependsOn:
       - InvokeStepFunctionPermissionFromS3  # ← ADD THIS
     Properties:
-      BucketName: !Sub '${StackPrefix}-landingzone-useast1-943143228843-bucket'
+      BucketName: !Sub 
+        - '${VideoBucket}-${AWS::Region}-${AWS::AccountId}-${env}'
+        - VideoBucket: !FindInMap [BucketNames, Video, BaseName]
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins:
+              - '*'
+            AllowedMethods:
+              - GET
+              - PUT
+              - POST
+              - DELETE
+              - HEAD
+            AllowedHeaders:
+              - '*'
+            ExposedHeaders:
+              - ETag
+              - x-amz-request-id
+              - x-amz-id-2
+            MaxAge: 3600
       NotificationConfiguration:
         LambdaConfigurations:
           - Event: s3:ObjectCreated:*
             Function: !GetAtt InvokeStepFunctionFunction.Arn
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: suffix
+                    Value: .mp4
 
   # ============ S3 BUCKET AUTO-DELETION RESOURCES ============
   EmptyBucketLambdaRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${StackPrefix}-empty-bucket-lambda-role'
+      RoleName: !Sub '${StackPrefix}-${env}-empty-bucket-lambda-role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -1407,17 +1370,21 @@ Resources:
                 Action:
                   - s3:ListBucket
                   - s3:ListBucketVersions
-                Resource: !Sub 'arn:aws:s3:::${StackPrefix}-landingzone-useast1-943143228843-bucket'
+                Resource: !Sub 
+                  - 'arn:aws:s3:::${VideoBucket}-${AWS::Region}-${AWS::AccountId}-${env}'
+                  - VideoBucket: !FindInMap [BucketNames, Video, BaseName]
               - Effect: Allow
                 Action:
                   - s3:DeleteObject
                   - s3:DeleteObjectVersion
-                Resource: !Sub 'arn:aws:s3:::${StackPrefix}-landingzone-useast1-943143228843-bucket/*'
+                Resource: !Sub 
+                  - 'arn:aws:s3:::${VideoBucket}-${AWS::Region}-${AWS::AccountId}-${env}/*'
+                  - VideoBucket: !FindInMap [BucketNames, Video, BaseName]
 
   EmptyBucketFunction:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: !Sub '${StackPrefix}-empty-bucket'
+      FunctionName: !Sub '${StackPrefix}-${env}-empty-bucket'
       Runtime: python3.13
       Handler: index.lambda_handler
       Timeout: 900
@@ -1516,7 +1483,7 @@ Resources:
     Type: Custom::EmptyBucket
     Properties:
       ServiceToken: !GetAtt EmptyBucketFunction.Arn
-      BucketName: !Ref LandingZoneBucket
+      BucketName: !Ref VideoBucket
 
   InvokeStepFunctionPermissionFromS3:
     Type: AWS::Lambda::Permission
@@ -1524,7 +1491,9 @@ Resources:
       FunctionName: !GetAtt InvokeStepFunctionFunction.Arn
       Action: lambda:InvokeFunction
       Principal: s3.amazonaws.com
-      SourceArn: !Sub 'arn:aws:s3:::${StackPrefix}-landingzone-useast1-943143228843-bucket'
+      SourceArn: !Sub 
+        - 'arn:aws:s3:::${VideoBucket}-${AWS::Region}-${AWS::AccountId}-${env}'
+        - VideoBucket: !FindInMap [BucketNames, Video, BaseName]
       SourceAccount: !Ref AWS::AccountId
 
   CreateSnapshotFunction:
@@ -1533,7 +1502,7 @@ Resources:
       - OpenSearchDomain
       - OpenSearchRoleMappingCustomResource
     Properties:
-      FunctionName: !Sub '${StackPrefix}-create-opensearch-snapshot'
+      FunctionName: !Sub '${StackPrefix}-${env}-create-opensearch-snapshot'
       Runtime: python3.12
       Handler: index.lambda_handler
       Timeout: 300
@@ -1543,11 +1512,13 @@ Resources:
         Variables:
           OPENSEARCH_CLUSTER_HOST: !Sub 'https://${OpenSearchDomain.DomainEndpoint}'
           SNAPSHOT_ROLE_ARN: !GetAtt OpenSearchSnapshotRole.Arn
-          S3_BUCKET: condenast-fe
-          REPO_NAME: !Sub '${StackPrefix}-snapshot-repo'
+          S3_BUCKET: !Sub 
+            - '${env}-${FrontendBucket}-${AWS::AccountId}'
+            - FrontendBucket: !FindInMap [BucketNames, Frontend, BaseName]
+          REPO_NAME: !Sub '${StackPrefix}-${env}-snapshot-repo'
           
       Layers:
-        - arn:aws:lambda:us-east-1:770693421928:layer:Klayers-p312-requests:18
+        - !Sub 'arn:aws:lambda:${AWS::Region}:770693421928:layer:Klayers-p312-requests:18'
 
       VpcConfig:
         SubnetIds:
@@ -1583,12 +1554,12 @@ Resources:
               return response
           def lambda_handler(event, context):
               try:
-                  region = "us-east-1"
+                  region = os.environ.get('AWS_DEFAULT_REGION', 'us-east-1')
                   service = "es"
                   function = event.get("function", "register-snapshot-repo")
                   domain = os.getenv("OPENSEARCH_CLUSTER_HOST", "").replace("https://", "").replace("http://", "")
                   repo_name = os.getenv("REPO_NAME", "condenast-snapshot-repo")
-                  bucket = os.getenv("S3_BUCKET", "condenast-fe")
+                  bucket = os.getenv("S3_BUCKET", "aihouse-dist")
                   role_arn = os.getenv("SNAPSHOT_ROLE_ARN")
                   snapshot_name = f"manual-snapshot-{int(time.time())}"
                   if not domain:
@@ -1630,7 +1601,7 @@ Resources:
     Type: AWS::Lambda::Function
     DependsOn: OpenSearchDomain
     Properties:
-      FunctionName: !Sub '${StackPrefix}-opensearch-role-mapper'
+      FunctionName: !Sub '${StackPrefix}-${env}-opensearch-role-mapper'
       Runtime: python3.11
       Handler: index.lambda_handler
       Timeout: 60
@@ -1641,6 +1612,7 @@ Resources:
           import json
           import boto3
           import urllib3
+          import os
           from botocore.auth import SigV4Auth
           from botocore.awsrequest import AWSRequest
           
@@ -1712,7 +1684,7 @@ Resources:
                       admin_creds['SessionToken']
                   )
                   
-                  region = 'us-east-1'
+                  region = os.environ.get('AWS_DEFAULT_REGION', 'us-east-1')
                   service = 'es'
                   results = {}
                   
@@ -1793,7 +1765,7 @@ Resources:
     Type: AWS::CloudFront::OriginAccessControl
     Properties:
       OriginAccessControlConfig:
-        Name: !Sub '${StackPrefix}-frontend-oac'
+        Name: !Sub '${StackPrefix}-${env}-frontend-oac'
         OriginAccessControlOriginType: s3
         SigningBehavior: always
         SigningProtocol: sigv4
@@ -1812,25 +1784,135 @@ Resources:
           CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6 # AWS "CachingOptimized"
         Origins:
           - Id: FrontendS3Origin
-            DomainName: !Sub '${FrontendS3Bucket}.s3.${AWS::Region}.${AWS::URLSuffix}'
+            DomainName: !Sub 
+              - '${env}-${FrontendBucket}-${AWS::AccountId}.s3.${AWS::Region}.${AWS::URLSuffix}'
+              - FrontendBucket: !FindInMap [BucketNames, Frontend, BaseName]
             OriginAccessControlId: !GetAtt FrontendOAC.Id
-            OriginPath: ""
+            OriginPath: '/demo-apps-assets/video-search-demo/FE'
             S3OriginConfig:
               OriginAccessIdentity: ""
 
-  FrontendBucketPolicy:
-    Type: AWS::S3::BucketPolicy
+  # Lambda Role for managing bucket policy
+  ManageBucketPolicyLambdaRole:
+    Type: AWS::IAM::Role
     Properties:
-      Bucket: !Ref FrontendS3Bucket
+      RoleName: !Sub '${StackPrefix}-${env}-manage-bucket-policy-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3BucketPolicyAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutBucketPolicy
+                  - s3:GetBucketPolicy
+                  - s3:DeleteBucketPolicy
+                Resource: !Sub 
+                  - 'arn:aws:s3:::${env}-${FrontendBucket}-${AWS::AccountId}'
+                  - FrontendBucket: !FindInMap [BucketNames, Frontend, BaseName]
+
+  # Lambda Function for managing bucket policy
+  ManageBucketPolicyFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${StackPrefix}-${env}-manage-bucket-policy'
+      Runtime: python3.13
+      Handler: index.handler
+      Role: !GetAtt ManageBucketPolicyLambdaRole.Arn
+      Timeout: 60
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import urllib3
+          
+          s3 = boto3.client('s3')
+          http = urllib3.PoolManager()
+          
+          def handler(event, context):
+              print(f"Event: {json.dumps(event)}")
+              
+              response_data = {}
+              status = 'SUCCESS'
+              reason = ''
+              physical_id = event.get('PhysicalResourceId', 'ManageBucketPolicy')
+              
+              try:
+                  bucket_name = event['ResourceProperties']['BucketName']
+                  policy_json = event['ResourceProperties']['PolicyDocument']
+                  
+                  if event['RequestType'] in ['Create', 'Update']:
+                      s3.put_bucket_policy(
+                          Bucket=bucket_name,
+                          Policy=json.dumps(policy_json)
+                      )
+                      reason = f"Successfully applied policy to bucket {bucket_name}"
+                      print(reason)
+                  elif event['RequestType'] == 'Delete':
+                      try:
+                          s3.delete_bucket_policy(Bucket=bucket_name)
+                          reason = f"Successfully removed policy from bucket {bucket_name}"
+                      except s3.exceptions.NoSuchBucketPolicy:
+                          reason = "No policy to delete"
+                      print(reason)
+              except Exception as e:
+                  status = 'FAILED'
+                  reason = f"Error: {str(e)}"
+                  print(reason)
+              
+              response_body = {
+                  'Status': status,
+                  'Reason': reason,
+                  'PhysicalResourceId': physical_id,
+                  'StackId': event['StackId'],
+                  'RequestId': event['RequestId'],
+                  'LogicalResourceId': event['LogicalResourceId'],
+                  'Data': response_data
+              }
+              
+              json_response = json.dumps(response_body).encode('utf-8')
+              
+              try:
+                  http.request(
+                      'PUT',
+                      event['ResponseURL'],
+                      body=json_response,
+                      headers={'Content-Type': 'application/json'}
+                  )
+              except Exception as e:
+                  print(f"Failed to send response: {e}")
+                  raise
+              
+              return response_data
+
+  # Custom Resource (replaces the deleted FrontendBucketPolicy)
+  FrontendBucketPolicyCustomResource:
+    Type: Custom::S3BucketPolicy
+    Properties:
+      ServiceToken: !GetAtt ManageBucketPolicyFunction.Arn
+      BucketName: !Sub 
+        - '${env}-${FrontendBucket}-${AWS::AccountId}'
+        - FrontendBucket: !FindInMap [BucketNames, Frontend, BaseName]
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
-          - Sid: AllowCloudFrontReadFromThisDistribution
+          - Sid: AllowCloudFrontServicePrincipalReadOnly
             Effect: Allow
             Principal:
               Service: cloudfront.amazonaws.com
             Action: s3:GetObject
-            Resource: !Sub 'arn:aws:s3:::${FrontendS3Bucket}/*'
+            Resource: !Sub 
+              - 'arn:aws:s3:::${env}-${FrontendBucket}-${AWS::AccountId}/demo-apps-assets/video-search-demo/FE/*'
+              - FrontendBucket: !FindInMap [BucketNames, Frontend, BaseName]
             Condition:
               StringEquals:
                 AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${FrontendDistribution}'
@@ -1864,7 +1946,7 @@ Resources:
       - ApplicationLoadBalancer
       - ECSService
     Properties:
-      FunctionName: !Sub '${StackPrefix}-update-frontend-config'
+      FunctionName: !Sub '${StackPrefix}-${env}-update-frontend-config'
       Runtime: python3.11
       Handler: index.lambda_handler
       Timeout: 60
@@ -1872,7 +1954,9 @@ Resources:
       Role: !GetAtt UpdateFrontendConfigLambdaRole.Arn
       Environment:
         Variables:
-          FRONTEND_S3_BUCKET: !Ref FrontendS3Bucket
+          FRONTEND_S3_BUCKET: !Sub 
+            - '${env}-${FrontendBucket}-${AWS::AccountId}'
+            - FrontendBucket: !FindInMap [BucketNames, Frontend, BaseName]
       Code:
         ZipFile: |
           import json
@@ -1967,10 +2051,10 @@ Resources:
                   # Upload to S3 with error handling
                   if s3_bucket:
                       try:
-                          print(f"📤 Uploading config.json to s3://{s3_bucket}/config.json")
+                          print(f"📤 Uploading config.json to s3://{s3_bucket}/demo-apps-assets/video-search-demo/FE/config.json")
                           s3.put_object(
                               Bucket=s3_bucket,
-                              Key='config.json',
+                              Key='demo-apps-assets/video-search-demo/FE/config.json',
                               Body=json.dumps(config, indent=2),
                               ContentType='application/json',
                               ContentDisposition='inline',
@@ -1982,7 +2066,7 @@ Resources:
                           )
                           
                           print("✅ config.json uploaded successfully")
-                          result_data['ConfigUploaded'] = f's3://{s3_bucket}/config.json'
+                          result_data['ConfigUploaded'] = f's3://{s3_bucket}/demo-apps-assets/video-search-demo/FE/config.json'
                           result_data['S3UploadSuccess'] = True
                           
                       except Exception as s3_error:
@@ -2033,7 +2117,7 @@ Resources:
           - !GetAtt CreateSnapshotLambdaRole.Arn
           - !GetAtt SearchSimilarVideosTaskRole.Arn
           - !GetAtt ECSTaskRole.Arn
-          - !Sub 'arn:aws:iam::${AccountId}:root'
+          - !Sub 'arn:aws:iam::${AWS::AccountId}:root'
 
   # ============ NEW CUSTOM RESOURCE FOR FRONTEND CONFIG UPDATE ============
   UpdateFrontendConfigCustomResource:
@@ -2045,7 +2129,9 @@ Resources:
       - ApiDistribution
     Properties:
       ServiceToken: !GetAtt UpdateFrontendConfigLambda.Arn
-      FrontendBucket: !Ref FrontendS3Bucket
+      FrontendBucket: !Sub 
+        - '${env}-${FrontendBucket}-${AWS::AccountId}'
+        - FrontendBucket: !FindInMap [BucketNames, Frontend, BaseName]
       ApiBaseUrl: !Sub 'https://${ApiDistribution.DomainName}'
       Trigger: !Sub '${AWS::StackName}-${ApplicationLoadBalancer}'
 
@@ -2069,7 +2155,7 @@ Resources:
       - InvokeBedrockMarengoFunction
       - StoreEmbeddingsFunction
     Properties:
-      StateMachineName: !Sub '${StackPrefix}-pipeline'
+      StateMachineName: !Sub '${StackPrefix}-${env}-pipeline'
       RoleArn: !GetAtt StepFunctionsExecutionRole.Arn
       DefinitionString: !Sub |
         {
@@ -2093,7 +2179,7 @@ Resources:
                 "Overrides": {
                   "ContainerOverrides": [
                     {
-                      "Name": "${StackPrefix}-video-preprocessor",
+                      "Name": "${StackPrefix}-${env}-video-preprocessor",
                       "Environment": [
                         {"Name": "BUCKET_NAME", "Value.$": "$.detail.bucket.name"},
                         {"Name": "VIDEO_KEY", "Value.$": "$.detail.object.key"},
