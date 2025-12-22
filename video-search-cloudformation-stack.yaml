@@ -109,7 +109,10 @@ Resources:
                 Action:
                   - s3:PutObject
                   - s3:GetObject
-                Resource: !Sub 'arn:aws:s3:::processed-videos-${AWS::Region}-${AWS::AccountId}-${env}/*'
+                  - s3:ListBucket
+                Resource: 
+                  - !Sub 'arn:aws:s3:::processed-videos-${AWS::Region}-${AWS::AccountId}-${env}'
+                  - !Sub 'arn:aws:s3:::processed-videos-${AWS::Region}-${AWS::AccountId}-${env}/*'
         - PolicyName: StepFunctionsAccess
           PolicyDocument:
             Version: '2012-10-17'
@@ -186,6 +189,8 @@ Resources:
                   - !Sub 
                     - 'arn:aws:s3:::${VideoBucket}-${AWS::Region}-${AWS::AccountId}-${env}/*'
                     - VideoBucket: !FindInMap [BucketNames, Video, BaseName]
+                  - !Sub 'arn:aws:s3:::processed-videos-${AWS::Region}-${AWS::AccountId}-${env}'
+                  - !Sub 'arn:aws:s3:::processed-videos-${AWS::Region}-${AWS::AccountId}-${env}/*'
         - PolicyName: SSMMessagesAccess
           PolicyDocument:
             Version: '2012-10-17'
@@ -242,8 +247,12 @@ Resources:
                     - VideoBucket: !FindInMap [BucketNames, Video, BaseName]
               - Effect: Allow
                 Action:
+                  - s3:GetObject
                   - s3:PutObject
-                Resource: !Sub 'arn:aws:s3:::processed-videos-${AWS::Region}-${AWS::AccountId}-${env}/*'
+                  - s3:ListBucket
+                Resource: 
+                  - !Sub 'arn:aws:s3:::processed-videos-${AWS::Region}-${AWS::AccountId}-${env}/*'
+                  - !Sub 'arn:aws:s3:::processed-videos-${AWS::Region}-${AWS::AccountId}-${env}'
         - PolicyName: BedrockAccess
           PolicyDocument:
             Version: '2012-10-17'
@@ -253,6 +262,7 @@ Resources:
                   - bedrock:InvokeModel
                   - bedrock:InvokeModelWithResponseStream
                   - bedrock:GetAsyncInvoke
+                  - bedrock:StartAsyncInvoke
                 Resource:
                   - !Sub 'arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:async-invoke/*'
                   - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/twelvelabs.marengo-embed-2-7-v1:0'
@@ -263,6 +273,7 @@ Resources:
                   - bedrock:InvokeModel
                   - bedrock:InvokeModelWithResponseStream
                   - bedrock:GetAsyncInvoke
+                  - bedrock:StartAsyncInvoke
                 Resource:
                   - !Sub 'arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:async-invoke/*'
                   - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/twelvelabs.marengo-embed-3-0-v1:0'
@@ -432,7 +443,10 @@ Resources:
                 Action:
                   - s3:PutObject
                   - s3:GetObject
-                Resource: !Sub 'arn:aws:s3:::processed-videos-${AWS::Region}-${AWS::AccountId}-${env}/*'
+                  - s3:ListBucket
+                Resource: 
+                  - !Sub 'arn:aws:s3:::processed-videos-${AWS::Region}-${AWS::AccountId}-${env}/*'
+                  - !Sub 'arn:aws:s3:::processed-videos-${AWS::Region}-${AWS::AccountId}-${env}'
         - PolicyName: EC2NetworkInterface
           PolicyDocument:
             Version: '2012-10-17'
@@ -582,14 +596,22 @@ Resources:
       EnableDnsSupport: true
       Tags:
         - Key: Name
-          Value: condenast-vpc
+          Value: !Sub '${StackPrefix}-${env}-vpc'
+        - Key: Environment
+          Value: !Ref env
+        - Key: StackPrefix
+          Value: !Ref StackPrefix
 
   InternetGateway:
     Type: AWS::EC2::InternetGateway
     Properties:
       Tags:
         - Key: Name
-          Value: condenast-igw
+          Value: !Sub '${StackPrefix}-${env}-igw'
+        - Key: Environment
+          Value: !Ref env
+        - Key: StackPrefix
+          Value: !Ref StackPrefix
 
   InternetGatewayAttachment:
     Type: AWS::EC2::VPCGatewayAttachment
@@ -606,7 +628,11 @@ Resources:
       MapPublicIpOnLaunch: true
       Tags:
         - Key: Name
-          Value: condenast-public-subnet-1
+          Value: !Sub '${StackPrefix}-${env}-public-subnet-1'
+        - Key: Environment
+          Value: !Ref env
+        - Key: StackPrefix
+          Value: !Ref StackPrefix
 
   PublicSubnet2:
     Type: AWS::EC2::Subnet
@@ -617,7 +643,11 @@ Resources:
       MapPublicIpOnLaunch: true
       Tags:
         - Key: Name
-          Value: condenast-public-subnet-2
+          Value: !Sub '${StackPrefix}-${env}-public-subnet-2'
+        - Key: Environment
+          Value: !Ref env
+        - Key: StackPrefix
+          Value: !Ref StackPrefix
 
   PrivateSubnet1:
     Type: AWS::EC2::Subnet
@@ -628,7 +658,11 @@ Resources:
       MapPublicIpOnLaunch: false
       Tags:
         - Key: Name
-          Value: condenast-private-subnet-1
+          Value: !Sub '${StackPrefix}-${env}-private-subnet-1'
+        - Key: Environment
+          Value: !Ref env
+        - Key: StackPrefix
+          Value: !Ref StackPrefix
 
   PrivateSubnet2:
     Type: AWS::EC2::Subnet
@@ -639,13 +673,24 @@ Resources:
       MapPublicIpOnLaunch: false
       Tags:
         - Key: Name
-          Value: condenast-private-subnet-2
+          Value: !Sub '${StackPrefix}-${env}-private-subnet-2'
+        - Key: Environment
+          Value: !Ref env
+        - Key: StackPrefix
+          Value: !Ref StackPrefix
 
   NatGatewayEIP:
     Type: AWS::EC2::EIP
     DependsOn: InternetGatewayAttachment
     Properties:
       Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub '${StackPrefix}-${env}-nat-eip'
+        - Key: Environment
+          Value: !Ref env
+        - Key: StackPrefix
+          Value: !Ref StackPrefix
 
   NatGateway:
     Type: AWS::EC2::NatGateway
@@ -654,7 +699,11 @@ Resources:
       SubnetId: !Ref PublicSubnet1
       Tags:
         - Key: Name
-          Value: condenast-nat-gateway
+          Value: !Sub '${StackPrefix}-${env}-nat-gateway'
+        - Key: Environment
+          Value: !Ref env
+        - Key: StackPrefix
+          Value: !Ref StackPrefix
 
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
@@ -662,7 +711,11 @@ Resources:
       VpcId: !Ref VPC
       Tags:
         - Key: Name
-          Value: condenast-public-rt
+          Value: !Sub '${StackPrefix}-${env}-public-rt'
+        - Key: Environment
+          Value: !Ref env
+        - Key: StackPrefix
+          Value: !Ref StackPrefix
 
   DefaultPublicRoute:
     Type: AWS::EC2::Route
@@ -690,7 +743,11 @@ Resources:
       VpcId: !Ref VPC
       Tags:
         - Key: Name
-          Value: condenast-private-rt
+          Value: !Sub '${StackPrefix}-${env}-private-rt'
+        - Key: Environment
+          Value: !Ref env
+        - Key: StackPrefix
+          Value: !Ref StackPrefix
 
   DefaultPrivateRoute:
     Type: AWS::EC2::Route
@@ -714,59 +771,81 @@ Resources:
   ALBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Security group for ALB
+      GroupName: !Sub '${StackPrefix}-${env}-alb-sg'
+      GroupDescription: !Sub 'Security group for ${StackPrefix}-${env} ALB'
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 8000
           ToPort: 8000
           CidrIp: 0.0.0.0/0
+          Description: Allow HTTP 8000 from anywhere
         - IpProtocol: tcp
           FromPort: 443
           ToPort: 443
           CidrIp: 0.0.0.0/0
+          Description: Allow HTTPS from anywhere
       SecurityGroupEgress:
         - IpProtocol: "-1"
           CidrIp: 0.0.0.0/0
+          Description: Allow all outbound traffic
       Tags:
         - Key: Name
-          Value: condenast-alb-sg
+          Value: !Sub '${StackPrefix}-${env}-alb-sg'
+        - Key: Environment
+          Value: !Ref env
+        - Key: StackPrefix
+          Value: !Ref StackPrefix
 
   ECSSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Security group for ECS tasks
+      GroupName: !Sub '${StackPrefix}-${env}-ecs-sg'
+      GroupDescription: !Sub 'Security group for ${StackPrefix}-${env} ECS tasks'
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 8000
           ToPort: 8000
           SourceSecurityGroupId: !Ref ALBSecurityGroup
+          Description: Allow traffic from ALB
       SecurityGroupEgress:
         - IpProtocol: "-1"
           CidrIp: 0.0.0.0/0
+          Description: Allow all outbound traffic
       Tags:
         - Key: Name
-          Value: condenast-ecs-sg
+          Value: !Sub '${StackPrefix}-${env}-ecs-sg'
+        - Key: Environment
+          Value: !Ref env
+        - Key: StackPrefix
+          Value: !Ref StackPrefix
 
 
 
   LambdaSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Security group for Lambda functions
+      GroupName: !Sub '${StackPrefix}-${env}-lambda-sg'
+      GroupDescription: !Sub 'Security group for ${StackPrefix}-${env} Lambda functions'
       VpcId: !Ref VPC
       SecurityGroupEgress:
         - IpProtocol: "-1"
           CidrIp: 0.0.0.0/0
+          Description: Allow all outbound traffic
       Tags:
         - Key: Name
-          Value: condenast-lambda-sg
+          Value: !Sub '${StackPrefix}-${env}-lambda-sg'
+        - Key: Environment
+          Value: !Ref env
+        - Key: StackPrefix
+          Value: !Ref StackPrefix
 
   VPCEndpointSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Security group for VPC endpoints
+      GroupName: !Sub '${StackPrefix}-${env}-vpc-endpoint-sg'
+      GroupDescription: !Sub 'Security group for ${StackPrefix}-${env} VPC endpoints'
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: tcp
@@ -782,9 +861,14 @@ Resources:
       SecurityGroupEgress:
         - IpProtocol: "-1"
           CidrIp: 0.0.0.0/0
+          Description: Allow all outbound traffic
       Tags:
         - Key: Name
-          Value: condenast-vpc-endpoint-sg
+          Value: !Sub '${StackPrefix}-${env}-vpc-endpoint-sg'
+        - Key: Environment
+          Value: !Ref env
+        - Key: StackPrefix
+          Value: !Ref StackPrefix
 
   S3VPCEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -793,6 +877,13 @@ Resources:
       ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
       RouteTableIds:
         - !Ref PrivateRouteTable
+      Tags:
+        - Key: Name
+          Value: !Sub '${StackPrefix}-${env}-s3-endpoint'
+        - Key: Environment
+          Value: !Ref env
+        - Key: StackPrefix
+          Value: !Ref StackPrefix
 
   ECRAPIVPCEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -806,6 +897,13 @@ Resources:
       SecurityGroupIds:
         - !Ref VPCEndpointSecurityGroup
       PrivateDnsEnabled: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${StackPrefix}-${env}-ecr-api-endpoint'
+        - Key: Environment
+          Value: !Ref env
+        - Key: StackPrefix
+          Value: !Ref StackPrefix
 
   ECRDKRVPCEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -819,6 +917,13 @@ Resources:
       SecurityGroupIds:
         - !Ref VPCEndpointSecurityGroup
       PrivateDnsEnabled: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${StackPrefix}-${env}-ecr-dkr-endpoint'
+        - Key: Environment
+          Value: !Ref env
+        - Key: StackPrefix
+          Value: !Ref StackPrefix
 
   BedrockVPCEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -832,6 +937,13 @@ Resources:
       SecurityGroupIds:
         - !Ref VPCEndpointSecurityGroup
       PrivateDnsEnabled: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${StackPrefix}-${env}-bedrock-endpoint'
+        - Key: Environment
+          Value: !Ref env
+        - Key: StackPrefix
+          Value: !Ref StackPrefix
 
   BedrockRuntimeVPCEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -845,6 +957,13 @@ Resources:
       SecurityGroupIds:
         - !Ref VPCEndpointSecurityGroup
       PrivateDnsEnabled: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${StackPrefix}-${env}-bedrock-runtime-endpoint'
+        - Key: Environment
+          Value: !Ref env
+        - Key: StackPrefix
+          Value: !Ref StackPrefix
 
   StepFunctionsVPCEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -858,6 +977,13 @@ Resources:
       SecurityGroupIds:
         - !Ref VPCEndpointSecurityGroup
       PrivateDnsEnabled: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${StackPrefix}-${env}-states-endpoint'
+        - Key: Environment
+          Value: !Ref env
+        - Key: StackPrefix
+          Value: !Ref StackPrefix
 
   STSVPCEndpoint:
     Type: AWS::EC2::VPCEndpoint
@@ -871,6 +997,13 @@ Resources:
       SecurityGroupIds:
         - !Ref VPCEndpointSecurityGroup
       PrivateDnsEnabled: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${StackPrefix}-${env}-sts-endpoint'
+        - Key: Environment
+          Value: !Ref env
+        - Key: StackPrefix
+          Value: !Ref StackPrefix
 
   OpenSearchRoleMappingLambdaRole:
     Type: AWS::IAM::Role
@@ -1150,9 +1283,6 @@ Resources:
       Environment:
         Variables:
           AWS_BUCKET_OWNER: !Ref AWS::AccountId
-          VIDEO_BUCKET: !Sub 
-            - '${VideoBucket}-${AWS::Region}-${AWS::AccountId}-${env}'
-            - VideoBucket: !FindInMap [BucketNames, Video, BaseName]
           OUTPUT_BUCKET: !Sub 'processed-videos-${AWS::Region}-${AWS::AccountId}-${env}'
       VpcConfig:
         SubnetIds:
@@ -1172,7 +1302,7 @@ Resources:
               part = event['part']
               MARENGO_MODEL_VERSION = 3
               print(f"Processing {key} in bucket {bucket}")
-              video_bucket = os.environ['VIDEO_BUCKET']
+              dst_bucket = os.environ['OUTPUT_BUCKET']
               if MARENGO_MODEL_VERSION == 3:
                   modelId = 'twelvelabs.marengo-embed-3-0-v1:0'
                   request_body = {
@@ -1201,9 +1331,9 @@ Resources:
                       "embeddingOption": ["visual-text", "audio", "visual-image"]
                   }
               if MARENGO_MODEL_VERSION == 3:
-                  outputS3uri = f"s3://{video_bucket}/embeddings-marengo-3/{key}/"
+                  outputS3uri = f"s3://{dst_bucket}/embeddings-marengo-3/{key}/"
               else:
-                  outputS3uri = f"s3://{video_bucket}/embeddings/{key}/"
+                  outputS3uri = f"s3://{dst_bucket}/embeddings/{key}/"
               response = bedrock_runtime.start_async_invoke(
                   modelId=modelId,
                   modelInput=request_body,
@@ -1289,6 +1419,7 @@ Resources:
           VIDEO_BUCKET: !Sub 
             - '${VideoBucket}-${AWS::Region}-${AWS::AccountId}-${env}'
             - VideoBucket: !FindInMap [BucketNames, Video, BaseName]
+          OUTPUT_BUCKET: !Sub 'processed-videos-${AWS::Region}-${AWS::AccountId}-${env}'
       Code:
         ZipFile: |
           import json
@@ -1302,7 +1433,7 @@ Resources:
               for record in event['Records']:
                   bucket = record['s3']['bucket']['name']
                   key = unquote_plus(record['s3']['object']['key'])
-                  VIDEO_BUCKET = os.environ['VIDEO_BUCKET']
+                  dst_bucket = os.environ['OUTPUT_BUCKET']
                   timestamp = str(datetime.now().strftime('%m-%d-%Y_%H-%M-%S'))
                   if not key.lower().endswith(('.mp4', '.mov', '.avi')):
                       print(f"Skipping non-video file: {key}")
@@ -1311,7 +1442,7 @@ Resources:
                       "detail": {
                           "bucket": {"name": bucket},
                           "object": {"key": key},
-                          "dst_bucket": {"key": VIDEO_BUCKET}
+                          "dst_bucket": {"key": dst_bucket}
                       }
                   }
                   try:
@@ -1386,6 +1517,38 @@ Resources:
               - x-amz-request-id
               - x-amz-id-2
             MaxAge: 3600
+
+  # ============ S3 BUCKET POLICY FOR BEDROCK ACCESS ============
+  OutputVideoBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref OutputVideoBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowBedrockBucketLevelAccess
+            Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action:
+              - s3:GetBucketLocation
+              - s3:ListBucket
+            Resource: !Sub 'arn:aws:s3:::processed-videos-${AWS::Region}-${AWS::AccountId}-${env}'
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+          
+          - Sid: AllowBedrockObjectLevelAccess
+            Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action:
+              - s3:GetObject      # Bedrock reads the input video
+              - s3:PutObject      # Bedrock writes embeddings
+            Resource: !Sub 'arn:aws:s3:::processed-videos-${AWS::Region}-${AWS::AccountId}-${env}/*'  # ✅ ADD /*
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
 
   # ============ S3 BUCKET AUTO-DELETION RESOURCES ============
   EmptyBucketLambdaRole:
@@ -1955,7 +2118,7 @@ Resources:
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
-          - Sid: AllowCloudFrontServicePrincipalReadOnly
+          - Sid: !Sub '${env}-${StackPrefix}-AllowCloudFrontServicePrincipalReadOnly'
             Effect: Allow
             Principal:
               Service: cloudfront.amazonaws.com
