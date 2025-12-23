@@ -10,8 +10,8 @@ Description: |
   - All IAM roles follow least-privilege principle with app-scoped OpenSearch roles.
   - Custom resource Lambda configures OpenSearch FGAC role mappings during stack creation.
   - REQUIRED: Lambda layer ZIP files must exist in S3 before deployment:
-    * s3://{env}-aihouse-dist-{AccountId}/lambda-artifacts/opensearch-query-dependencies-2fb22b80-caf2-4d3f-84a6-3f863bf3c409.zip
-    * s3://{env}-aihouse-dist-{AccountId}/lambda-artifacts/ffmpeg-video-processing-dependencies-697fac5e-fb3f-4814-b610-f0d2d3812616.zip
+    * s3://{env}-aihouse-dist-{TargetAccountId}/lambda-artifacts/opensearch-query-dependencies-2fb22b80-caf2-4d3f-84a6-3f863bf3c409.zip
+    * s3://{env}-aihouse-dist-{TargetAccountId}/lambda-artifacts/ffmpeg-video-processing-dependencies-697fac5e-fb3f-4814-b610-f0d2d3812616.zip
 
 Parameters:
   env:
@@ -27,6 +27,17 @@ Parameters:
     MaxLength: 8
 
 Mappings:
+  EnvironmentConfig:
+    local:
+      AccountId: "943143228843"
+    dev:
+      AccountId: "726510512353"
+    stage:
+      AccountId: "521639666075"
+    demo:
+      AccountId: "027089197617"
+    prod:
+      AccountId: "144321573266"
   BucketNames:
     Video:
       BaseName: 'videos'
@@ -90,21 +101,24 @@ Resources:
                 Action:
                   - s3:GetObject
                 Resource: !Sub 
-                  - 'arn:aws:s3:::${VideoBucket}-${AWS::Region}-${AWS::AccountId}-${env}/*'
+                  - 'arn:aws:s3:::${StackPrefix}-${VideoBucket}-${AWS::Region}-${TargetAccountId}-${env}/*'
                   - VideoBucket: !FindInMap [BucketNames, Video, BaseName]
+                    TargetAccountId: !FindInMap [EnvironmentConfig, !Ref env, AccountId]
               - Effect: Allow
                 Action:
                   - s3:PutObject
                 Resource: !Sub 
-                  - 'arn:aws:s3:::${VideoBucket}-${AWS::Region}-${AWS::AccountId}-${env}/*'
+                  - 'arn:aws:s3:::${StackPrefix}-${VideoBucket}-${AWS::Region}-${TargetAccountId}-${env}/*'
                   - VideoBucket: !FindInMap [BucketNames, Video, BaseName]
+                    TargetAccountId: !FindInMap [EnvironmentConfig, !Ref env, AccountId]
               - Effect: Allow
                 Action:
                   - s3:ListBucket
                 Resource:
                   - !Sub 
-                    - 'arn:aws:s3:::${VideoBucket}-${AWS::Region}-${AWS::AccountId}-${env}'
+                    - 'arn:aws:s3:::${StackPrefix}-${VideoBucket}-${AWS::Region}-${TargetAccountId}-${env}'
                     - VideoBucket: !FindInMap [BucketNames, Video, BaseName]
+                      TargetAccountId: !FindInMap [EnvironmentConfig, !Ref env, AccountId]
               - Effect: Allow
                 Action:
                   - s3:PutObject
@@ -184,11 +198,13 @@ Resources:
                   - s3:PutObject
                 Resource:
                   - !Sub 
-                    - 'arn:aws:s3:::${VideoBucket}-${AWS::Region}-${AWS::AccountId}-${env}'
+                    - 'arn:aws:s3:::${StackPrefix}-${VideoBucket}-${AWS::Region}-${TargetAccountId}-${env}'
                     - VideoBucket: !FindInMap [BucketNames, Video, BaseName]
+                      TargetAccountId: !FindInMap [EnvironmentConfig, !Ref env, AccountId]
                   - !Sub 
-                    - 'arn:aws:s3:::${VideoBucket}-${AWS::Region}-${AWS::AccountId}-${env}/*'
+                    - 'arn:aws:s3:::${StackPrefix}-${VideoBucket}-${AWS::Region}-${TargetAccountId}-${env}/*'
                     - VideoBucket: !FindInMap [BucketNames, Video, BaseName]
+                      TargetAccountId: !FindInMap [EnvironmentConfig, !Ref env, AccountId]
                   - !Sub 'arn:aws:s3:::${StackPrefix}-processed-videos-${AWS::Region}-${AWS::AccountId}-${env}'
                   - !Sub 'arn:aws:s3:::${StackPrefix}-processed-videos-${AWS::Region}-${AWS::AccountId}-${env}/*'
         - PolicyName: SSMMessagesAccess
@@ -240,11 +256,13 @@ Resources:
                   - s3:ListBucket
                 Resource:
                   - !Sub 
-                    - 'arn:aws:s3:::${VideoBucket}-${AWS::Region}-${AWS::AccountId}-${env}/*'
+                    - 'arn:aws:s3:::${StackPrefix}-${VideoBucket}-${AWS::Region}-${TargetAccountId}-${env}/*'
                     - VideoBucket: !FindInMap [BucketNames, Video, BaseName]
+                      TargetAccountId: !FindInMap [EnvironmentConfig, !Ref env, AccountId]
                   - !Sub 
-                    - 'arn:aws:s3:::${VideoBucket}-${AWS::Region}-${AWS::AccountId}-${env}'
+                    - 'arn:aws:s3:::${StackPrefix}-${VideoBucket}-${AWS::Region}-${TargetAccountId}-${env}'
                     - VideoBucket: !FindInMap [BucketNames, Video, BaseName]
+                      TargetAccountId: !FindInMap [EnvironmentConfig, !Ref env, AccountId]
               - Effect: Allow
                 Action:
                   - s3:GetObject
@@ -346,8 +364,9 @@ Resources:
                 Effect: Allow
                 Resource:
                   - !Sub 
-                    - 'arn:aws:s3:::local-${FrontendBucket}-${AWS::AccountId}'
+                    - 'arn:aws:s3:::${env}-${FrontendBucket}-${TargetAccountId}'
                     - FrontendBucket: !FindInMap [BucketNames, Frontend, BaseName]
+                      TargetAccountId: !FindInMap [EnvironmentConfig, !Ref env, AccountId]
               - Action:
                   - s3:GetObject
                   - s3:PutObject
@@ -355,8 +374,9 @@ Resources:
                 Effect: Allow
                 Resource:
                   - !Sub 
-                    - 'arn:aws:s3:::local-${FrontendBucket}-${AWS::AccountId}/*'
+                    - 'arn:aws:s3:::${env}-${FrontendBucket}-${TargetAccountId}/*'
                     - FrontendBucket: !FindInMap [BucketNames, Frontend, BaseName]
+                      TargetAccountId: !FindInMap [EnvironmentConfig, !Ref env, AccountId]
 
   CreateSnapshotLambdaRole:
     Type: AWS::IAM::Role
@@ -434,11 +454,13 @@ Resources:
                   - s3:PutObject
                 Resource:
                   - !Sub 
-                    - 'arn:aws:s3:::${VideoBucket}-${AWS::Region}-${AWS::AccountId}-${env}/*'
+                    - 'arn:aws:s3:::${StackPrefix}-${VideoBucket}-${AWS::Region}-${TargetAccountId}-${env}/*'
                     - VideoBucket: !FindInMap [BucketNames, Video, BaseName]
+                      TargetAccountId: !FindInMap [EnvironmentConfig, !Ref env, AccountId]
                   - !Sub 
-                    - 'arn:aws:s3:::${VideoBucket}-${AWS::Region}-${AWS::AccountId}-${env}'
+                    - 'arn:aws:s3:::${StackPrefix}-${VideoBucket}-${AWS::Region}-${TargetAccountId}-${env}'
                     - VideoBucket: !FindInMap [BucketNames, Video, BaseName]
+                      TargetAccountId: !FindInMap [EnvironmentConfig, !Ref env, AccountId]
               - Effect: Allow
                 Action:
                   - s3:PutObject
@@ -579,15 +601,17 @@ Resources:
                   - s3:GetObject
                 Resource:
                   - !Sub 
-                    - 'arn:aws:s3:::local-${FrontendBucket}-${AWS::AccountId}/*'
+                    - 'arn:aws:s3:::${env}-${FrontendBucket}-${TargetAccountId}/*'
                     - FrontendBucket: !FindInMap [BucketNames, Frontend, BaseName]
+                      TargetAccountId: !FindInMap [EnvironmentConfig, !Ref env, AccountId]
               - Effect: Allow
                 Action:
                   - s3:ListBucket
                 Resource:
                   - !Sub 
-                    - 'arn:aws:s3:::local-${FrontendBucket}-${AWS::AccountId}'
+                    - 'arn:aws:s3:::${env}-${FrontendBucket}-${TargetAccountId}'
                     - FrontendBucket: !FindInMap [BucketNames, Frontend, BaseName]
+                      TargetAccountId: !FindInMap [EnvironmentConfig, !Ref env, AccountId]
   VPC:
     Type: AWS::EC2::VPC
     Properties:
@@ -1173,8 +1197,9 @@ Resources:
               Value: !Sub 'https://${OpenSearchDomain.DomainEndpoint}'
             - Name: AWS_S3_BUCKET
               Value: !Sub 
-                - '${VideoBucket}-${AWS::Region}-${AWS::AccountId}-${env}'
+                - '${StackPrefix}-${VideoBucket}-${AWS::Region}-${TargetAccountId}-${env}'
                 - VideoBucket: !FindInMap [BucketNames, Video, BaseName]
+                  TargetAccountId: !FindInMap [EnvironmentConfig, !Ref env, AccountId]
             - Name: PORT
               Value: '8000'
           LogConfiguration:
@@ -1355,8 +1380,9 @@ Resources:
         - python3.13
       Content:
         S3Bucket: !Sub 
-          - 'local-${FrontendBucket}-${AWS::AccountId}'
+          - '${env}-${FrontendBucket}-${TargetAccountId}'
           - FrontendBucket: !FindInMap [BucketNames, Frontend, BaseName]
+            TargetAccountId: !FindInMap [EnvironmentConfig, !Ref env, AccountId]
         S3Key: demo-apps-assets/video-search-demo/lambda-artifacts/opensearch-query-dependencies-2fb22b80-caf2-4d3f-84a6-3f863bf3c409.zip
 
   FfmpegVideoProcessingDependenciesLayer:
@@ -1367,8 +1393,9 @@ Resources:
         - python3.13
       Content:
         S3Bucket: !Sub 
-          - 'local-${FrontendBucket}-${AWS::AccountId}'
+          - '${env}-${FrontendBucket}-${TargetAccountId}'
           - FrontendBucket: !FindInMap [BucketNames, Frontend, BaseName]
+            TargetAccountId: !FindInMap [EnvironmentConfig, !Ref env, AccountId]
         S3Key: demo-apps-assets/video-search-demo/lambda-artifacts/ffmpeg-video-processing-dependencies-697fac5e-fb3f-4814-b610-f0d2d3812616.zip
 
   StoreEmbeddingsFunction:
@@ -1398,8 +1425,9 @@ Resources:
           - !Ref LambdaSecurityGroup
       Code:
         S3Bucket: !Sub 
-          - 'local-${FrontendBucket}-${AWS::AccountId}'
+          - '${env}-${FrontendBucket}-${TargetAccountId}'
           - FrontendBucket: !FindInMap [BucketNames, Frontend, BaseName]
+            TargetAccountId: !FindInMap [EnvironmentConfig, !Ref env, AccountId]
         S3Key: 'demo-apps-assets/video-search-demo/lambda-artifacts/store-embeddings-lambda.zip'
       EphemeralStorage:
         Size: 2048
@@ -1417,8 +1445,9 @@ Resources:
         Variables:
           STATE_MACHINE_ARN: !Ref VideoProcessingStateMachine
           VIDEO_BUCKET: !Sub 
-            - '${VideoBucket}-${AWS::Region}-${AWS::AccountId}-${env}'
+            - '${StackPrefix}-${VideoBucket}-${AWS::Region}-${TargetAccountId}-${env}'
             - VideoBucket: !FindInMap [BucketNames, Video, BaseName]
+              TargetAccountId: !FindInMap [EnvironmentConfig, !Ref env, AccountId]
           OUTPUT_BUCKET: !Sub '${StackPrefix}-processed-videos-${AWS::Region}-${AWS::AccountId}-${env}'
       Code:
         ZipFile: |
@@ -1465,8 +1494,9 @@ Resources:
       - InvokeStepFunctionPermissionFromS3  # ← ADD THIS
     Properties:
       BucketName: !Sub 
-        - '${VideoBucket}-${AWS::Region}-${AWS::AccountId}-${env}'
+        - '${StackPrefix}-${VideoBucket}-${AWS::Region}-${TargetAccountId}-${env}'
         - VideoBucket: !FindInMap [BucketNames, Video, BaseName]
+          TargetAccountId: !FindInMap [EnvironmentConfig, !Ref env, AccountId]
       CorsConfiguration:
         CorsRules:
           - AllowedOrigins:
@@ -1575,8 +1605,9 @@ Resources:
                   - s3:ListBucketVersions
                 Resource: 
                   - !Sub 
-                    - 'arn:aws:s3:::${VideoBucket}-${AWS::Region}-${AWS::AccountId}-${env}'
+                    - 'arn:aws:s3:::${StackPrefix}-${VideoBucket}-${AWS::Region}-${TargetAccountId}-${env}'
                     - VideoBucket: !FindInMap [BucketNames, Video, BaseName]
+                      TargetAccountId: !FindInMap [EnvironmentConfig, !Ref env, AccountId]
                   - !Sub 'arn:aws:s3:::${StackPrefix}-processed-videos-${AWS::Region}-${AWS::AccountId}-${env}'
               - Effect: Allow
                 Action:
@@ -1584,8 +1615,9 @@ Resources:
                   - s3:DeleteObjectVersion
                 Resource: 
                   - !Sub 
-                    - 'arn:aws:s3:::${VideoBucket}-${AWS::Region}-${AWS::AccountId}-${env}/*'
+                    - 'arn:aws:s3:::${StackPrefix}-${VideoBucket}-${AWS::Region}-${TargetAccountId}-${env}/*'
                     - VideoBucket: !FindInMap [BucketNames, Video, BaseName]
+                      TargetAccountId: !FindInMap [EnvironmentConfig, !Ref env, AccountId]
                   - !Sub 'arn:aws:s3:::${StackPrefix}-processed-videos-${AWS::Region}-${AWS::AccountId}-${env}/*'
 
   EmptyBucketFunction:
@@ -1705,8 +1737,9 @@ Resources:
       Action: lambda:InvokeFunction
       Principal: s3.amazonaws.com
       SourceArn: !Sub 
-        - 'arn:aws:s3:::${VideoBucket}-${AWS::Region}-${AWS::AccountId}-${env}'
+        - 'arn:aws:s3:::${StackPrefix}-${VideoBucket}-${AWS::Region}-${TargetAccountId}-${env}'
         - VideoBucket: !FindInMap [BucketNames, Video, BaseName]
+          TargetAccountId: !FindInMap [EnvironmentConfig, !Ref env, AccountId]
       SourceAccount: !Ref AWS::AccountId
 
   CreateSnapshotFunction:
@@ -1726,8 +1759,9 @@ Resources:
           OPENSEARCH_CLUSTER_HOST: !Sub 'https://${OpenSearchDomain.DomainEndpoint}'
           SNAPSHOT_ROLE_ARN: !GetAtt OpenSearchSnapshotRole.Arn
           S3_BUCKET: !Sub 
-            - 'local-${FrontendBucket}-${AWS::AccountId}'
+            - '${env}-${FrontendBucket}-${TargetAccountId}'
             - FrontendBucket: !FindInMap [BucketNames, Frontend, BaseName]
+              TargetAccountId: !FindInMap [EnvironmentConfig, !Ref env, AccountId]
           REPO_NAME: !Sub '${StackPrefix}-${env}-snapshot-repo'
           
       Layers:
@@ -1998,8 +2032,9 @@ Resources:
         Origins:
           - Id: FrontendS3Origin
             DomainName: !Sub 
-              - 'local-${FrontendBucket}-${AWS::AccountId}.s3.${AWS::Region}.${AWS::URLSuffix}'
+              - '${env}-${FrontendBucket}-${TargetAccountId}.s3.${AWS::Region}.${AWS::URLSuffix}'
               - FrontendBucket: !FindInMap [BucketNames, Frontend, BaseName]
+                TargetAccountId: !FindInMap [EnvironmentConfig, !Ref env, AccountId]
             OriginAccessControlId: !GetAtt FrontendOAC.Id
             OriginPath: '/demo-apps-assets/video-search-demo/FE'
             S3OriginConfig:
@@ -2030,8 +2065,9 @@ Resources:
                   - s3:GetBucketPolicy
                   - s3:DeleteBucketPolicy
                 Resource: !Sub 
-                  - 'arn:aws:s3:::local-${FrontendBucket}-${AWS::AccountId}'
+                  - 'arn:aws:s3:::${env}-${FrontendBucket}-${TargetAccountId}'
                   - FrontendBucket: !FindInMap [BucketNames, Frontend, BaseName]
+                    TargetAccountId: !FindInMap [EnvironmentConfig, !Ref env, AccountId]
 
   # Lambda Function for managing bucket policy
   ManageBucketPolicyFunction:
@@ -2047,6 +2083,7 @@ Resources:
           import json
           import boto3
           import urllib3
+          from botocore.exceptions import ClientError
           
           s3 = boto3.client('s3')
           http = urllib3.PoolManager()
@@ -2061,22 +2098,65 @@ Resources:
               
               try:
                   bucket_name = event['ResourceProperties']['BucketName']
-                  policy_json = event['ResourceProperties']['PolicyDocument']
+                  new_statement = event['ResourceProperties']['PolicyStatement']
+                  statement_sid = new_statement.get('Sid')
+                  
+                  if not statement_sid:
+                      raise ValueError("PolicyStatement must include a 'Sid' for safe policy management")
+                  
+                  # Get existing bucket policy
+                  try:
+                      response = s3.get_bucket_policy(Bucket=bucket_name)
+                      existing_policy = json.loads(response['Policy'])
+                  except ClientError as e:
+                      if e.response['Error']['Code'] == 'NoSuchBucketPolicy':
+                          existing_policy = {"Version": "2012-10-17", "Statement": []}
+                      else:
+                          raise
                   
                   if event['RequestType'] in ['Create', 'Update']:
+                      # Remove any existing statement with the same Sid
+                      existing_policy['Statement'] = [
+                          stmt for stmt in existing_policy['Statement'] 
+                          if stmt.get('Sid') != statement_sid
+                      ]
+                      
+                      # Add the new statement
+                      existing_policy['Statement'].append(new_statement)
+                      
                       s3.put_bucket_policy(
                           Bucket=bucket_name,
-                          Policy=json.dumps(policy_json)
+                          Policy=json.dumps(existing_policy)
                       )
-                      reason = f"Successfully applied policy to bucket {bucket_name}"
+                      reason = f"Successfully merged policy statement '{statement_sid}' to bucket {bucket_name}"
                       print(reason)
+                      
                   elif event['RequestType'] == 'Delete':
-                      try:
-                          s3.delete_bucket_policy(Bucket=bucket_name)
-                          reason = f"Successfully removed policy from bucket {bucket_name}"
-                      except s3.exceptions.NoSuchBucketPolicy:
-                          reason = "No policy to delete"
+                      # Remove only the statement with matching Sid
+                      original_count = len(existing_policy['Statement'])
+                      existing_policy['Statement'] = [
+                          stmt for stmt in existing_policy['Statement'] 
+                          if stmt.get('Sid') != statement_sid
+                      ]
+                      
+                      if len(existing_policy['Statement']) != original_count:
+                          if existing_policy['Statement']:
+                              s3.put_bucket_policy(
+                                  Bucket=bucket_name,
+                                  Policy=json.dumps(existing_policy)
+                              )
+                          else:
+                              # If no statements left, delete the entire policy
+                              try:
+                                  s3.delete_bucket_policy(Bucket=bucket_name)
+                              except ClientError as e:
+                                  if e.response['Error']['Code'] != 'NoSuchBucketPolicy':
+                                      raise
+                          reason = f"Successfully removed policy statement '{statement_sid}' from bucket {bucket_name}"
+                      else:
+                          reason = f"No statement with Sid '{statement_sid}' found to remove"
                       print(reason)
+                      
               except Exception as e:
                   status = 'FAILED'
                   reason = f"Error: {str(e)}"
@@ -2113,22 +2193,22 @@ Resources:
     Properties:
       ServiceToken: !GetAtt ManageBucketPolicyFunction.Arn
       BucketName: !Sub 
-        - 'local-${FrontendBucket}-${AWS::AccountId}'
+        - '${env}-${FrontendBucket}-${TargetAccountId}'
         - FrontendBucket: !FindInMap [BucketNames, Frontend, BaseName]
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Sid: !Sub '${env}-${StackPrefix}-AllowCloudFrontServicePrincipalReadOnly'
-            Effect: Allow
-            Principal:
-              Service: cloudfront.amazonaws.com
-            Action: s3:GetObject
-            Resource: !Sub 
-              - 'arn:aws:s3:::local-${FrontendBucket}-${AWS::AccountId}/demo-apps-assets/video-search-demo/FE/*'
-              - FrontendBucket: !FindInMap [BucketNames, Frontend, BaseName]
-            Condition:
-              StringEquals:
-                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${FrontendDistribution}'
+          TargetAccountId: !FindInMap [EnvironmentConfig, !Ref env, AccountId]
+      PolicyStatement:
+        Sid: !Sub '${env}-${StackPrefix}-AllowCloudFrontServicePrincipalReadOnly'
+        Effect: Allow
+        Principal:
+          Service: cloudfront.amazonaws.com
+        Action: s3:GetObject
+        Resource: !Sub 
+          - 'arn:aws:s3:::${env}-${FrontendBucket}-${TargetAccountId}/demo-apps-assets/video-search-demo/FE/*'
+          - FrontendBucket: !FindInMap [BucketNames, Frontend, BaseName]
+            TargetAccountId: !FindInMap [EnvironmentConfig, !Ref env, AccountId]
+        Condition:
+          StringEquals:
+            AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${FrontendDistribution}'
 
   ApiDistribution:
     Type: AWS::CloudFront::Distribution
@@ -2168,8 +2248,9 @@ Resources:
       Environment:
         Variables:
           FRONTEND_S3_BUCKET: !Sub 
-            - 'local-${FrontendBucket}-${AWS::AccountId}'
+            - '${env}-${FrontendBucket}-${TargetAccountId}'
             - FrontendBucket: !FindInMap [BucketNames, Frontend, BaseName]
+              TargetAccountId: !FindInMap [EnvironmentConfig, !Ref env, AccountId]
       Code:
         ZipFile: |
           import json
@@ -2343,8 +2424,9 @@ Resources:
     Properties:
       ServiceToken: !GetAtt UpdateFrontendConfigLambda.Arn
       FrontendBucket: !Sub 
-        - 'local-${FrontendBucket}-${AWS::AccountId}'
+        - '${env}-${FrontendBucket}-${TargetAccountId}'
         - FrontendBucket: !FindInMap [BucketNames, Frontend, BaseName]
+          TargetAccountId: !FindInMap [EnvironmentConfig, !Ref env, AccountId]
       ApiBaseUrl: !Sub 'https://${ApiDistribution.DomainName}'
       Trigger: !Sub '${AWS::StackName}-${ApplicationLoadBalancer}'
 
