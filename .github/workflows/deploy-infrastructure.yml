@@ -1,0 +1,535 @@
+name: Deploy Video Search Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'demo'
+        type: choice
+        options:
+          - demo
+          - dev
+          - stage
+          - prod
+      stack_prefix:
+        description: 'Stack prefix (max 8 chars)'
+        required: true
+        default: 'vs-1'
+        type: string
+      aws_region:
+        description: 'AWS Region'
+        required: true
+        default: 'us-east-1'
+        type: choice
+        options:
+          - us-east-1
+          - us-east-2
+          - us-west-1
+          - us-west-2
+          - eu-west-1
+          - eu-central-1
+      deploy_frontend:
+        description: 'Deploy frontend after backend'
+        required: true
+        default: true
+        type: boolean
+      action:
+        description: 'Action to perform'
+        required: true
+        default: 'deploy'
+        type: choice
+        options:
+          - deploy
+          - cleanup
+
+  push:
+    branches:
+      - main
+    paths:
+      - 'video-search-cloudformation-stack.yaml'
+      - 'frontend-cloudformation-stack.yaml'
+      - '.github/workflows/deploy-infrastructure.yml'
+
+env:
+  AWS_REGION: ${{ inputs.aws_region || 'us-east-1' }}
+  ENVIRONMENT: ${{ inputs.environment || 'demo' }}
+  STACK_PREFIX: ${{ inputs.stack_prefix || 'vs-1' }}
+  PROJECT_NAME: video-search
+
+jobs:
+  validate-inputs:
+    runs-on: ubuntu-latest
+    outputs:
+      backend_stack_name: ${{ steps.names.outputs.backend_stack_name }}
+      frontend_stack_name: ${{ steps.names.outputs.frontend_stack_name }}
+    steps:
+      - name: Validate stack prefix
+        run: |
+          if [[ ! "${{ env.STACK_PREFIX }}" =~ ^[a-zA-Z0-9-]{1,8}$ ]]; then
+            echo "❌ Stack prefix must be 1-8 characters, alphanumeric and hyphens only"
+            exit 1
+          fi
+          echo "✅ Stack prefix validation passed"
+
+      - name: Set stack names
+        id: names
+        run: |
+          echo "backend_stack_name=${{ env.STACK_PREFIX }}-${{ env.ENVIRONMENT }}-backend" >> $GITHUB_OUTPUT
+          echo "frontend_stack_name=${{ env.PROJECT_NAME }}-frontend-${{ env.ENVIRONMENT }}" >> $GITHUB_OUTPUT
+
+  deploy-backend:
+    needs: validate-inputs
+    runs-on: ubuntu-latest
+    if: ${{ inputs.action == 'deploy' }}
+    outputs:
+      api_url: ${{ steps.get-outputs.outputs.api_url }}
+      video_bucket: ${{ steps.get-outputs.outputs.video_bucket }}
+      opensearch_endpoint: ${{ steps.get-outputs.outputs.opensearch_endpoint }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Validate CloudFormation template
+        run: |
+          echo "🔍 Validating backend CloudFormation template..."
+          aws cloudformation validate-template \
+            --template-body file://video-search-cloudformation-stack.yaml
+
+      - name: Deploy backend infrastructure
+        run: |
+          echo "🚀 Deploying backend infrastructure..."
+          echo "Stack: ${{ needs.validate-inputs.outputs.backend_stack_name }}"
+          echo "Environment: ${{ env.ENVIRONMENT }}"
+          echo "Region: ${{ env.AWS_REGION }}"
+          
+          # Check if stack exists
+          if aws cloudformation describe-stacks \
+            --stack-name "${{ needs.validate-inputs.outputs.backend_stack_name }}" \
+            --region "${{ env.AWS_REGION }}" >/dev/null 2>&1; then
+            echo "📝 Stack exists, updating..."
+            aws cloudformation update-stack \
+              --stack-name "${{ needs.validate-inputs.outputs.backend_stack_name }}" \
+              --template-body file://video-search-cloudformation-stack.yaml \
+              --parameters \
+                ParameterKey=env,ParameterValue="${{ env.ENVIRONMENT }}" \
+                ParameterKey=StackPrefix,ParameterValue="${{ env.STACK_PREFIX }}" \
+              --capabilities CAPABILITY_NAMED_IAM \
+              --region "${{ env.AWS_REGION }}" || {
+                echo "⚠️ No changes to deploy for backend stack"
+              }
+            
+            echo "⏳ Waiting for stack update to complete..."
+            aws cloudformation wait stack-update-complete \
+              --stack-name "${{ needs.validate-inputs.outputs.backend_stack_name }}" \
+              --region "${{ env.AWS_REGION }}" || true
+          else
+            echo "🆕 Creating new stack..."
+            aws cloudformation create-stack \
+              --stack-name "${{ needs.validate-inputs.outputs.backend_stack_name }}" \
+              --template-body file://video-search-cloudformation-stack.yaml \
+              --parameters \
+                ParameterKey=env,ParameterValue="${{ env.ENVIRONMENT }}" \
+                ParameterKey=StackPrefix,ParameterValue="${{ env.STACK_PREFIX }}" \
+              --capabilities CAPABILITY_NAMED_IAM \
+              --on-failure DELETE \
+              --region "${{ env.AWS_REGION }}"
+            
+            echo "⏳ Waiting for stack creation to complete (this may take 15-20 minutes)..."
+            aws cloudformation wait stack-create-complete \
+              --stack-name "${{ needs.validate-inputs.outputs.backend_stack_name }}" \
+              --region "${{ env.AWS_REGION }}"
+          fi
+
+      - name: Get backend outputs
+        id: get-outputs
+        run: |
+          echo "📊 Getting backend stack outputs..."
+          
+          API_URL=$(aws cloudformation describe-stacks \
+            --stack-name "${{ needs.validate-inputs.outputs.backend_stack_name }}" \
+            --query 'Stacks[0].Outputs[?OutputKey==`ApiCloudFrontURL`].OutputValue' \
+            --output text \
+            --region "${{ env.AWS_REGION }}")
+          
+          VIDEO_BUCKET=$(aws cloudformation describe-stacks \
+            --stack-name "${{ needs.validate-inputs.outputs.backend_stack_name }}" \
+            --query 'Stacks[0].Outputs[?OutputKey==`VideoBucketName`].OutputValue' \
+            --output text \
+            --region "${{ env.AWS_REGION }}")
+          
+          OPENSEARCH_ENDPOINT=$(aws cloudformation describe-stacks \
+            --stack-name "${{ needs.validate-inputs.outputs.backend_stack_name }}" \
+            --query 'Stacks[0].Outputs[?OutputKey==`OpenSearchDomainEndpoint`].OutputValue' \
+            --output text \
+            --region "${{ env.AWS_REGION }}")
+          
+          echo "api_url=$API_URL" >> $GITHUB_OUTPUT
+          echo "video_bucket=$VIDEO_BUCKET" >> $GITHUB_OUTPUT
+          echo "opensearch_endpoint=$OPENSEARCH_ENDPOINT" >> $GITHUB_OUTPUT
+          
+          echo "✅ Backend deployment completed!"
+          echo "🌐 API URL: $API_URL"
+          echo "🪣 Video Bucket: $VIDEO_BUCKET"
+          echo "🔍 OpenSearch: $OPENSEARCH_ENDPOINT"
+
+  deploy-frontend:
+    needs: [validate-inputs, deploy-backend]
+    runs-on: ubuntu-latest
+    if: ${{ inputs.deploy_frontend != false && inputs.action == 'deploy' }}
+    outputs:
+      frontend_url: ${{ steps.get-frontend-outputs.outputs.frontend_url }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Validate frontend CloudFormation template
+        run: |
+          echo "🔍 Validating frontend CloudFormation template..."
+          aws cloudformation validate-template \
+            --template-body file://frontend-cloudformation-stack.yaml
+
+      - name: Deploy frontend infrastructure
+        run: |
+          echo "🚀 Deploying frontend infrastructure..."
+          echo "Stack: ${{ needs.validate-inputs.outputs.frontend_stack_name }}"
+          
+          # Check if stack exists
+          if aws cloudformation describe-stacks \
+            --stack-name "${{ needs.validate-inputs.outputs.frontend_stack_name }}" \
+            --region "${{ env.AWS_REGION }}" >/dev/null 2>&1; then
+            echo "📝 Stack exists, updating..."
+            aws cloudformation update-stack \
+              --stack-name "${{ needs.validate-inputs.outputs.frontend_stack_name }}" \
+              --template-body file://frontend-cloudformation-stack.yaml \
+              --parameters \
+                ParameterKey=Environment,ParameterValue="${{ env.ENVIRONMENT }}" \
+                ParameterKey=ProjectName,ParameterValue="${{ env.PROJECT_NAME }}" \
+              --region "${{ env.AWS_REGION }}" || {
+                echo "⚠️ No changes to deploy for frontend stack"
+              }
+            
+            echo "⏳ Waiting for frontend stack update..."
+            aws cloudformation wait stack-update-complete \
+              --stack-name "${{ needs.validate-inputs.outputs.frontend_stack_name }}" \
+              --region "${{ env.AWS_REGION }}" || true
+          else
+            echo "🆕 Creating new frontend stack..."
+            aws cloudformation create-stack \
+              --stack-name "${{ needs.validate-inputs.outputs.frontend_stack_name }}" \
+              --template-body file://frontend-cloudformation-stack.yaml \
+              --parameters \
+                ParameterKey=Environment,ParameterValue="${{ env.ENVIRONMENT }}" \
+                ParameterKey=ProjectName,ParameterValue="${{ env.PROJECT_NAME }}" \
+              --on-failure DELETE \
+              --region "${{ env.AWS_REGION }}"
+            
+            echo "⏳ Waiting for frontend stack creation..."
+            aws cloudformation wait stack-create-complete \
+              --stack-name "${{ needs.validate-inputs.outputs.frontend_stack_name }}" \
+              --region "${{ env.AWS_REGION }}"
+          fi
+
+      - name: Get frontend stack outputs
+        id: get-frontend-outputs
+        run: |
+          echo "📊 Getting frontend stack outputs..."
+          
+          S3_BUCKET=$(aws cloudformation describe-stacks \
+            --stack-name "${{ needs.validate-inputs.outputs.frontend_stack_name }}" \
+            --query 'Stacks[0].Outputs[?OutputKey==`FrontendBucketName`].OutputValue' \
+            --output text \
+            --region "${{ env.AWS_REGION }}")
+          
+          CF_DISTRIBUTION_ID=$(aws cloudformation describe-stacks \
+            --stack-name "${{ needs.validate-inputs.outputs.frontend_stack_name }}" \
+            --query 'Stacks[0].Outputs[?OutputKey==`CloudFrontDistributionId`].OutputValue' \
+            --output text \
+            --region "${{ env.AWS_REGION }}")
+          
+          FRONTEND_URL=$(aws cloudformation describe-stacks \
+            --stack-name "${{ needs.validate-inputs.outputs.frontend_stack_name }}" \
+            --query 'Stacks[0].Outputs[?OutputKey==`FrontendURL`].OutputValue' \
+            --output text \
+            --region "${{ env.AWS_REGION }}")
+          
+          echo "s3_bucket=$S3_BUCKET" >> $GITHUB_OUTPUT
+          echo "cf_distribution_id=$CF_DISTRIBUTION_ID" >> $GITHUB_OUTPUT
+          echo "frontend_url=$FRONTEND_URL" >> $GITHUB_OUTPUT
+          
+          echo "✅ Frontend infrastructure deployed!"
+          echo "🪣 S3 Bucket: $S3_BUCKET"
+          echo "🌐 CloudFront: $CF_DISTRIBUTION_ID"
+          echo "🔗 Frontend URL: $FRONTEND_URL"
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: |
+          echo "📦 Installing frontend dependencies..."
+          npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          echo "🔨 Building frontend..."
+          npm run build
+
+      - name: Generate runtime configuration
+        working-directory: frontend/dist
+        run: |
+          echo "⚙️ Generating runtime configuration..."
+          cat > config.json << EOF
+          {
+            "backendUrl": "${{ needs.deploy-backend.outputs.api_url }}",
+            "apiVersion": "v1",
+            "environment": "${{ env.ENVIRONMENT }}",
+            "features": {
+              "marengo3Enabled": true,
+              "uploadEnabled": true,
+              "maxUploadSizeMB": 500
+            },
+            "endpoints": {
+              "search": "/search",
+              "search3": "/search-3",
+              "list": "/list",
+              "upload": "/generate-upload-presigned-url",
+              "health": "/health"
+            },
+            "metadata": {
+              "lastUpdated": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+              "version": "1.0.0",
+              "deployedBy": "github-actions",
+              "environment": "${{ env.ENVIRONMENT }}",
+              "projectName": "${{ env.PROJECT_NAME }}",
+              "gitCommit": "${{ github.sha }}",
+              "gitRef": "${{ github.ref }}"
+            }
+          }
+          EOF
+          
+          echo "📄 Generated config.json:"
+          cat config.json | jq '.' || cat config.json
+
+      - name: Upload to S3
+        working-directory: frontend/dist
+        run: |
+          echo "☁️ Uploading frontend to S3..."
+          
+          # Upload static assets with long cache
+          aws s3 sync . "s3://${{ steps.get-frontend-outputs.outputs.s3_bucket }}" \
+            --delete \
+            --cache-control "public, max-age=31536000, immutable" \
+            --exclude "*.html" \
+            --exclude "config.json" \
+            --region "${{ env.AWS_REGION }}"
+          
+          # Upload HTML files with no cache
+          aws s3 sync . "s3://${{ steps.get-frontend-outputs.outputs.s3_bucket }}" \
+            --exclude "*" \
+            --include "*.html" \
+            --cache-control "no-cache, no-store, must-revalidate" \
+            --content-type "text/html" \
+            --region "${{ env.AWS_REGION }}"
+          
+          # Upload config.json with no cache
+          aws s3 cp config.json "s3://${{ steps.get-frontend-outputs.outputs.s3_bucket }}/config.json" \
+            --cache-control "no-cache, no-store, must-revalidate" \
+            --content-type "application/json" \
+            --region "${{ env.AWS_REGION }}"
+
+      - name: Invalidate CloudFront cache
+        run: |
+          echo "🔄 Invalidating CloudFront cache..."
+          INVALIDATION_ID=$(aws cloudfront create-invalidation \
+            --distribution-id "${{ steps.get-frontend-outputs.outputs.cf_distribution_id }}" \
+            --paths "/*" \
+            --query 'Invalidation.Id' \
+            --output text)
+          
+          echo "⏳ Waiting for invalidation to complete..."
+          aws cloudfront wait invalidation-completed \
+            --distribution-id "${{ steps.get-frontend-outputs.outputs.cf_distribution_id }}" \
+            --id "$INVALIDATION_ID"
+          
+          echo "✅ CloudFront cache invalidated!"
+
+  deployment-summary:
+    needs: [validate-inputs, deploy-backend, deploy-frontend]
+    runs-on: ubuntu-latest
+    if: ${{ always() && inputs.action == 'deploy' }}
+    steps:
+      - name: Deployment Summary
+        run: |
+          echo "# 🚀 Video Search Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment**: ${{ env.ENVIRONMENT }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Stack Prefix**: ${{ env.STACK_PREFIX }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **AWS Region**: ${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Backend Stack**: ${{ needs.validate-inputs.outputs.backend_stack_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Frontend Stack**: ${{ needs.validate-inputs.outputs.frontend_stack_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ needs.deploy-backend.result }}" == "success" ]]; then
+            echo "## ✅ Backend Deployment" >> $GITHUB_STEP_SUMMARY
+            echo "- **API URL**: ${{ needs.deploy-backend.outputs.api_url }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Video Bucket**: ${{ needs.deploy-backend.outputs.video_bucket }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **OpenSearch**: ${{ needs.deploy-backend.outputs.opensearch_endpoint }}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## ❌ Backend Deployment Failed" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [[ "${{ needs.deploy-frontend.result }}" == "success" ]]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "## ✅ Frontend Deployment" >> $GITHUB_STEP_SUMMARY
+            echo "- **Frontend URL**: ${{ needs.deploy-frontend.outputs.frontend_url }}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "## 🎉 Ready to Use!" >> $GITHUB_STEP_SUMMARY
+            echo "Your video search application is now live at:" >> $GITHUB_STEP_SUMMARY
+            echo "**${{ needs.deploy-frontend.outputs.frontend_url }}**" >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ inputs.deploy_frontend }}" == "true" ]]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "## ❌ Frontend Deployment Failed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "## ⏭️ Frontend Deployment Skipped" >> $GITHUB_STEP_SUMMARY
+            echo "Frontend deployment was disabled for this run." >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "1. 📹 Upload test videos to the S3 bucket" >> $GITHUB_STEP_SUMMARY
+          echo "2. 🔍 Test video search functionality" >> $GITHUB_STEP_SUMMARY
+          echo "3. 📊 Monitor CloudWatch logs for any issues" >> $GITHUB_STEP_SUMMARY
+          echo "4. 🗑️ Remember to clean up resources when done testing" >> $GITHUB_STEP_SUMMARY
+
+  # Cleanup Jobs (only run when action is 'cleanup')
+  cleanup-frontend:
+    needs: validate-inputs
+    runs-on: ubuntu-latest
+    if: ${{ inputs.action == 'cleanup' }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Delete frontend stack
+        run: |
+          echo "🗑️ Deleting frontend stack: ${{ needs.validate-inputs.outputs.frontend_stack_name }}"
+          
+          if aws cloudformation describe-stacks \
+            --stack-name "${{ needs.validate-inputs.outputs.frontend_stack_name }}" \
+            --region "${{ env.AWS_REGION }}" >/dev/null 2>&1; then
+            
+            echo "📦 Frontend stack exists, deleting..."
+            aws cloudformation delete-stack \
+              --stack-name "${{ needs.validate-inputs.outputs.frontend_stack_name }}" \
+              --region "${{ env.AWS_REGION }}"
+            
+            echo "⏳ Waiting for frontend stack deletion..."
+            aws cloudformation wait stack-delete-complete \
+              --stack-name "${{ needs.validate-inputs.outputs.frontend_stack_name }}" \
+              --region "${{ env.AWS_REGION }}"
+            
+            echo "✅ Frontend stack deleted successfully"
+          else
+            echo "ℹ️ Frontend stack does not exist, skipping"
+          fi
+
+  cleanup-backend:
+    needs: [validate-inputs, cleanup-frontend]
+    runs-on: ubuntu-latest
+    if: ${{ inputs.action == 'cleanup' }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Delete backend stack
+        run: |
+          echo "🗑️ Deleting backend stack: ${{ needs.validate-inputs.outputs.backend_stack_name }}"
+          
+          if aws cloudformation describe-stacks \
+            --stack-name "${{ needs.validate-inputs.outputs.backend_stack_name }}" \
+            --region "${{ env.AWS_REGION }}" >/dev/null 2>&1; then
+            
+            echo "📦 Backend stack exists, deleting..."
+            aws cloudformation delete-stack \
+              --stack-name "${{ needs.validate-inputs.outputs.backend_stack_name }}" \
+              --region "${{ env.AWS_REGION }}"
+            
+            echo "⏳ Waiting for backend stack deletion (this may take 10-15 minutes)..."
+            aws cloudformation wait stack-delete-complete \
+              --stack-name "${{ needs.validate-inputs.outputs.backend_stack_name }}" \
+              --region "${{ env.AWS_REGION }}"
+            
+            echo "✅ Backend stack deleted successfully"
+          else
+            echo "ℹ️ Backend stack does not exist, skipping"
+          fi
+
+  cleanup-summary:
+    needs: [validate-inputs, cleanup-frontend, cleanup-backend]
+    runs-on: ubuntu-latest
+    if: ${{ always() && inputs.action == 'cleanup' }}
+    steps:
+      - name: Cleanup Summary
+        run: |
+          echo "# 🗑️ Video Search Cleanup Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment**: ${{ env.ENVIRONMENT }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Stack Prefix**: ${{ env.STACK_PREFIX }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **AWS Region**: ${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Backend Stack**: ${{ needs.validate-inputs.outputs.backend_stack_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Frontend Stack**: ${{ needs.validate-inputs.outputs.frontend_stack_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ needs.cleanup-frontend.result }}" == "success" ]]; then
+            echo "## ✅ Frontend Cleanup Complete" >> $GITHUB_STEP_SUMMARY
+            echo "- S3 bucket and CloudFront distribution deleted" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## ❌ Frontend Cleanup Failed" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [[ "${{ needs.cleanup-backend.result }}" == "success" ]]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "## ✅ Backend Cleanup Complete" >> $GITHUB_STEP_SUMMARY
+            echo "- All AWS resources have been deleted" >> $GITHUB_STEP_SUMMARY
+            echo "- S3 buckets, OpenSearch domain, Lambda functions, ECS services, and VPC removed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "## ❌ Backend Cleanup Failed" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 💰 Cost Impact" >> $GITHUB_STEP_SUMMARY
+          echo "All billable AWS resources have been removed. You should see costs stop accruing within 24 hours." >> $GITHUB_STEP_SUMMARY

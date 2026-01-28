@@ -117,6 +117,7 @@ class RuntimeConfig {
    */
   _getDevelopmentConfig() {
     console.log('🔧 Using development configuration');
+    console.log('⚠️ WARNING: Using localhost backend. For deployed backend, ensure config.json is generated with CloudFormation stack output.');
     return {
       backendUrl: 'http://localhost:8000',
       apiVersion: 'v1',
@@ -135,7 +136,8 @@ class RuntimeConfig {
       },
       metadata: {
         lastUpdated: new Date().toISOString(),
-        version: '1.0.0-dev'
+        version: '1.0.0-dev',
+        source: 'development-fallback'
       }
     };
   }

@@ -17,23 +17,15 @@ Description: |
 Parameters:
   env:
     Type: String
-    Default: 'local'
-    AllowedValues: [ 'local', 'dev', 'stage', 'demo', 'prod' ]
-    Description: 'Environment name for resource naming (local, dev, stage, demo, prod)'
+    Default: 'demo'
+    AllowedValues: [ demo', 'dev', 'stage', 'prod' ]
+    Description: 'Environment name for resource naming (dev, stage, demo, prod)'
   StackPrefix:
     Type: String
     Default: 'vs-1'
     Description: 'Prefix for all resource names to avoid collisions (Max. - 8 characters)'
     AllowedPattern: '[a-zA-Z0-9-]+'
     MaxLength: 8
-  LambdaDependenciesBucket:
-    Type: String
-    Description: 'S3 bucket containing Lambda layer dependencies and artifacts'
-    Default: 'my-lambda-dependencies-bucket'
-  LambdaDependenciesPrefix:
-    Type: String
-    Description: 'S3 prefix path for Lambda artifacts (e.g., lambda-artifacts/ or demo-apps-assets/video-search-demo/lambda-artifacts/)'
-    Default: 'lambda-artifacts/'
   VideoBucketBaseName:
     Type: String
     Description: 'Base name for video bucket (e.g., videos)'
@@ -377,13 +369,15 @@ Resources:
           - Action:
             - s3:ListBucket
             Effect: Allow
-            Resource: !Sub 'arn:aws:s3:::${LambdaDependenciesBucket}'
+            Resource:
+            - !Sub 'arn:aws:s3:::${StackPrefix}-opensearch-snapshots-${AWS::Region}-${AWS::AccountId}-${env}'
           - Action:
             - s3:GetObject
             - s3:PutObject
             - s3:DeleteObject
             Effect: Allow
-            Resource: !Sub 'arn:aws:s3:::${LambdaDependenciesBucket}/*'
+            Resource:
+            - !Sub 'arn:aws:s3:::${StackPrefix}-opensearch-snapshots-${AWS::Region}-${AWS::AccountId}-${env}/*'
 
   CreateSnapshotLambdaRole:
     Type: AWS::IAM::Role
@@ -430,6 +424,18 @@ Resources:
           - Effect: Allow
             Action: iam:PassRole
             Resource: !GetAtt OpenSearchSnapshotRole.Arn
+      - PolicyName: S3SnapshotAccess
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - s3:ListBucket
+            - s3:GetObject
+            - s3:PutObject
+            Resource:
+            - !Sub 'arn:aws:s3:::${StackPrefix}-opensearch-snapshots-${AWS::Region}-${AWS::AccountId}-${env}'
+            - !Sub 'arn:aws:s3:::${StackPrefix}-opensearch-snapshots-${AWS::Region}-${AWS::AccountId}-${env}/*'
 
   StoreEmbeddingsLambdaRole:
     Type: AWS::IAM::Role
@@ -1169,7 +1175,7 @@ Resources:
       TaskRoleArn: !GetAtt ECSTaskRole.Arn
       ContainerDefinitions:
       - Name: !Sub '${StackPrefix}-${env}-video-preprocessor'
-        Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/video-preprocessing:latest'
+        Image: 'public.ecr.aws/videosearchdemo/video-preprocessing:latest'
         Essential: true
         LogConfiguration:
           LogDriver: awslogs
@@ -1207,7 +1213,7 @@ Resources:
         OperatingSystemFamily: LINUX
       ContainerDefinitions:
       - Name: !Sub '${StackPrefix}-${env}-search-similar-videos-container'
-        Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/condenast/search-similar-videos:latest'
+        Image: 'public.ecr.aws/videosearchdemo/search-similar-videos:latest'
         Essential: true
         PortMappings:
         - ContainerPort: 8000
@@ -1428,8 +1434,8 @@ Resources:
       CompatibleRuntimes:
       - python3.13
       Content:
-        S3Bucket: !Ref LambdaDependenciesBucket
-        S3Key: !Sub '${LambdaDependenciesPrefix}opensearch-query-dependencies-2fb22b80-caf2-4d3f-84a6-3f863bf3c409.zip'
+        S3Bucket: 'video-search-demo-public-layers'
+        S3Key: 'opensearch-query-dependencies.zip'
 
   FfmpegVideoProcessingDependenciesLayer:
     Type: AWS::Lambda::LayerVersion
@@ -1438,8 +1444,8 @@ Resources:
       CompatibleRuntimes:
       - python3.13
       Content:
-        S3Bucket: !Ref LambdaDependenciesBucket
-        S3Key: !Sub '${LambdaDependenciesPrefix}ffmpeg-video-processing-dependencies-697fac5e-fb3f-4814-b610-f0d2d3812616.zip'
+        S3Bucket: 'video-search-demo-public-layers'
+        S3Key: 'ffmpeg-video-processing-dependencies.zip'
 
   StoreEmbeddingsFunction:
     Type: AWS::Lambda::Function
@@ -1474,8 +1480,8 @@ Resources:
         SecurityGroupIds:
         - !Ref LambdaSecurityGroup
       Code:
-        S3Bucket: !Ref LambdaDependenciesBucket
-        S3Key: !Sub '${LambdaDependenciesPrefix}store-embeddings-lambda.zip'
+        S3Bucket: 'video-search-demo-public-code'
+        S3Key: 'store-embeddings-lambda.zip'
       EphemeralStorage:
         Size: 2048
 
@@ -1610,6 +1616,26 @@ Resources:
           - x-amz-id-2
           MaxAge: 3600
 
+  # ============ OPENSEARCH SNAPSHOTS BUCKET ============
+  OpenSearchSnapshotsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${StackPrefix}-opensearch-snapshots-${AWS::Region}-${AWS::AccountId}-${env}'
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Project
+          Value: !Sub '${env}-Video-Search-Demo-${StackPrefix}'
+        - Key: Environment
+          Value: !Ref env
+        - Key: StackPrefix
+          Value: !Ref StackPrefix
+
   # ============ S3 BUCKET POLICY FOR BEDROCK ACCESS ============
   OutputVideoBucketPolicy:
     Type: AWS::S3::BucketPolicy
@@ -1675,6 +1701,7 @@ Resources:
             Resource:
             - !Sub 'arn:aws:s3:::${StackPrefix}-${VideoBucketBaseName}-${AWS::Region}-${AWS::AccountId}-${env}'
             - !Sub 'arn:aws:s3:::${StackPrefix}-processed-videos-${AWS::Region}-${AWS::AccountId}-${env}'
+            - !Sub 'arn:aws:s3:::${StackPrefix}-opensearch-snapshots-${AWS::Region}-${AWS::AccountId}-${env}'
           - Effect: Allow
             Action:
             - s3:DeleteObject
@@ -1682,6 +1709,7 @@ Resources:
             Resource:
             - !Sub 'arn:aws:s3:::${StackPrefix}-${VideoBucketBaseName}-${AWS::Region}-${AWS::AccountId}-${env}/*'
             - !Sub 'arn:aws:s3:::${StackPrefix}-processed-videos-${AWS::Region}-${AWS::AccountId}-${env}/*'
+            - !Sub 'arn:aws:s3:::${StackPrefix}-opensearch-snapshots-${AWS::Region}-${AWS::AccountId}-${env}/*'
 
   EmptyBucketFunction:
     Type: AWS::Lambda::Function
@@ -1800,6 +1828,12 @@ Resources:
       ServiceToken: !GetAtt EmptyBucketFunction.Arn
       BucketName: !Ref OutputVideoBucket
 
+  EmptySnapshotBucketOnDelete:
+    Type: Custom::EmptyBucket
+    Properties:
+      ServiceToken: !GetAtt EmptyBucketFunction.Arn
+      BucketName: !Ref OpenSearchSnapshotsBucket
+
   InvokeStepFunctionPermissionFromS3:
     Type: AWS::Lambda::Permission
     Properties:
@@ -1832,7 +1866,7 @@ Resources:
         Variables:
           OPENSEARCH_CLUSTER_HOST: !Sub 'https://${OpenSearchDomain.DomainEndpoint}'
           SNAPSHOT_ROLE_ARN: !GetAtt OpenSearchSnapshotRole.Arn
-          S3_BUCKET: !Ref LambdaDependenciesBucket
+          S3_BUCKET: !Sub '${StackPrefix}-opensearch-snapshots-${AWS::Region}-${AWS::AccountId}-${env}'
           REPO_NAME: !Sub '${StackPrefix}-${env}-snapshot-repo'
 
       Layers:
@@ -2307,4 +2341,16 @@ Outputs:
     Value: !GetAtt OpenSearchDomain.DomainEndpoint
     Export:
       Name: !Sub '${AWS::StackName}-OpenSearchDomainEndpoint'
+
+  OpenSearchSnapshotsBucketName:
+    Description: 'S3 bucket for OpenSearch snapshots'
+    Value: !Ref OpenSearchSnapshotsBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-OpenSearchSnapshotsBucket'
+
+  StateMachineArn:
+    Description: 'Step Functions State Machine ARN'
+    Value: !Ref VideoProcessingStateMachine
+    Export:
+      Name: !Sub '${AWS::StackName}-StateMachineArn'
 

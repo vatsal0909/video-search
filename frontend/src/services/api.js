@@ -1,6 +1,27 @@
 import axios from 'axios';
 import runtimeConfig from '../config/runtimeConfig.js';
 
+/**
+ * API Service for Video Search Application
+ * 
+ * IMPORTANT: Backend URL Configuration
+ * =====================================
+ * This service uses the backend URL from the CloudFormation stack's ApiCloudFrontURL output.
+ * The URL is loaded dynamically at runtime from /config.json, which is generated during deployment.
+ * 
+ * Deployment Flow:
+ * 1. CloudFormation stack deploys backend infrastructure
+ * 2. Stack outputs ApiCloudFrontURL (e.g., https://d1234567890.cloudfront.net)
+ * 3. deploy-frontend.sh extracts this URL from stack outputs
+ * 4. config.json is generated with the extracted URL
+ * 5. config.json is uploaded to S3 with no-cache headers
+ * 6. Frontend loads config.json at runtime via runtimeConfig.js
+ * 7. All API calls use the dynamically loaded backend URL
+ * 
+ * DO NOT hardcode backend URLs in this file!
+ * See frontend/BACKEND_URL_CONFIG.md for detailed documentation.
+ */
+
 // Legacy axios instance - kept for backward compatibility if needed
 // Note: Most functions now use fetch with dynamic URLs from runtimeConfig
 const api = axios.create({
