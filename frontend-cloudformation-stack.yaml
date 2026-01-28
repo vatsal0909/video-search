@@ -21,6 +21,7 @@ Resources:
   # S3 Bucket for hosting static website
   FrontendBucket:
     Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
     Properties:
       BucketName: !Sub '${ProjectName}-frontend-${Environment}-${AWS::AccountId}'
       PublicAccessBlockConfiguration:
@@ -44,6 +45,179 @@ Resources:
           Value: !Ref Environment
         - Key: Purpose
           Value: 'Frontend Static Website'
+
+  # Custom resource to automatically empty S3 bucket before deletion
+  EmptyBucketLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${Environment}-empty-bucket-lambda-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3BucketEmptyAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:ListBucketVersions
+                Resource: !Sub 'arn:aws:s3:::${ProjectName}-frontend-${Environment}-${AWS::AccountId}'
+              - Effect: Allow
+                Action:
+                  - s3:DeleteObject
+                  - s3:DeleteObjectVersion
+                Resource: !Sub 'arn:aws:s3:::${ProjectName}-frontend-${Environment}-${AWS::AccountId}/*'
+      Tags:
+        - Key: Project
+          Value: !Sub '${ProjectName}'
+        - Key: Environment
+          Value: !Ref Environment
+
+  EmptyBucketFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-${Environment}-empty-bucket'
+      Description: 'Custom resource to empty S3 bucket before CloudFormation deletion'
+      Runtime: python3.13
+      Handler: index.lambda_handler
+      Timeout: 900
+      MemorySize: 256
+      Role: !GetAtt EmptyBucketLambdaRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import cfnresponse
+          import logging
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+          s3 = boto3.client('s3')
+
+          def lambda_handler(event, context):
+              """
+              Custom resource handler to empty S3 bucket on CloudFormation Delete.
+              Handles both versioned and non-versioned buckets.
+              """
+              logger.info(f"Event: {json.dumps(event)}")
+              
+              try:
+                  bucket_name = event['ResourceProperties']['BucketName']
+                  request_type = event['RequestType']
+                  
+                  if request_type == 'Delete':
+                      logger.info(f"DELETE request - Emptying bucket: {bucket_name}")
+                      empty_bucket(bucket_name)
+                      logger.info(f"✅ Successfully emptied bucket: {bucket_name}")
+                  elif request_type in ['Create', 'Update']:
+                      logger.info(f"{request_type} request - No action needed for bucket: {bucket_name}")
+                  
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {
+                      'Message': f'Bucket {bucket_name} processed successfully'
+                  })
+                  
+              except Exception as e:
+                  logger.error(f"❌ Error processing bucket: {str(e)}")
+                  import traceback
+                  traceback.print_exc()
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {
+                      'Error': str(e)
+                  })
+
+          def empty_bucket(bucket_name):
+              """
+              Delete all objects, versions, and delete markers from the bucket.
+              Uses pagination to handle large buckets efficiently.
+              """
+              try:
+                  # Step 1: Delete all object versions and delete markers (for versioned buckets)
+                  logger.info(f"Step 1: Deleting object versions and delete markers...")
+                  paginator = s3.get_paginator('list_object_versions')
+                  
+                  try:
+                      page_iterator = paginator.paginate(Bucket=bucket_name)
+                      
+                      for page in page_iterator:
+                          objects_to_delete = []
+                          
+                          # Collect all versions
+                          if 'Versions' in page:
+                              for version in page['Versions']:
+                                  objects_to_delete.append({
+                                      'Key': version['Key'],
+                                      'VersionId': version['VersionId']
+                                  })
+                          
+                          # Collect all delete markers
+                          if 'DeleteMarkers' in page:
+                              for marker in page['DeleteMarkers']:
+                                  objects_to_delete.append({
+                                      'Key': marker['Key'],
+                                      'VersionId': marker['VersionId']
+                                  })
+                          
+                          # Delete in batches (max 1000 per request)
+                          if objects_to_delete:
+                              logger.info(f"Deleting batch of {len(objects_to_delete)} object versions/markers")
+                              response = s3.delete_objects(
+                                  Bucket=bucket_name,
+                                  Delete={'Objects': objects_to_delete, 'Quiet': True}
+                              )
+                              
+                              if 'Errors' in response and response['Errors']:
+                                  logger.warning(f"Some objects failed to delete: {response['Errors']}")
+                  
+                  except s3.exceptions.NoSuchBucket:
+                      logger.info(f"Bucket {bucket_name} does not exist, skipping version deletion")
+                  
+                  # Step 2: Delete any remaining objects (for non-versioned buckets)
+                  logger.info(f"Step 2: Deleting remaining objects...")
+                  paginator = s3.get_paginator('list_objects_v2')
+                  
+                  try:
+                      page_iterator = paginator.paginate(Bucket=bucket_name)
+                      
+                      for page in page_iterator:
+                          if 'Contents' in page:
+                              objects_to_delete = [{'Key': obj['Key']} for obj in page['Contents']]
+                              
+                              if objects_to_delete:
+                                  logger.info(f"Deleting batch of {len(objects_to_delete)} objects")
+                                  response = s3.delete_objects(
+                                      Bucket=bucket_name,
+                                      Delete={'Objects': objects_to_delete, 'Quiet': True}
+                                  )
+                                  
+                                  if 'Errors' in response and response['Errors']:
+                                      logger.warning(f"Some objects failed to delete: {response['Errors']}")
+                  
+                  except s3.exceptions.NoSuchBucket:
+                      logger.info(f"Bucket {bucket_name} does not exist, skipping object deletion")
+                  
+                  logger.info(f"✅ Bucket {bucket_name} emptied successfully")
+                  
+              except Exception as e:
+                  logger.error(f"❌ Error emptying bucket {bucket_name}: {str(e)}")
+                  raise
+      Tags:
+        - Key: Project
+          Value: !Sub '${ProjectName}'
+        - Key: Environment
+          Value: !Ref Environment
+
+  EmptyFrontendBucketOnDelete:
+    Type: Custom::EmptyBucket
+    Properties:
+      ServiceToken: !GetAtt EmptyBucketFunction.Arn
+      BucketName: !Ref FrontendBucket
 
   # CloudFront Origin Access Control
   OriginAccessControl:
