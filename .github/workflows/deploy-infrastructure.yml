@@ -484,7 +484,27 @@ jobs:
             --stack-name "${{ needs.validate-inputs.outputs.frontend_stack_name }}" \
             --region "${{ env.AWS_REGION }}" >/dev/null 2>&1; then
             
-            echo "📦 Frontend stack exists, deleting..."
+            echo "📦 Frontend stack exists, preparing for deletion..."
+            
+            # Get the S3 bucket name from the stack outputs
+            FRONTEND_BUCKET=$(aws cloudformation describe-stacks \
+              --stack-name "${{ needs.validate-inputs.outputs.frontend_stack_name }}" \
+              --query 'Stacks[0].Outputs[?OutputKey==`FrontendBucketName`].OutputValue' \
+              --output text \
+              --region "${{ env.AWS_REGION }}" 2>/dev/null || echo "")
+            
+            if [[ -n "$FRONTEND_BUCKET" && "$FRONTEND_BUCKET" != "None" ]]; then
+              echo "🪣 Emptying S3 bucket: $FRONTEND_BUCKET"
+              
+              # Delete all objects (no versioning, so simple recursive delete)
+              aws s3 rm "s3://$FRONTEND_BUCKET" --recursive
+              
+              echo "✅ S3 bucket emptied successfully"
+            else
+              echo "ℹ️ No S3 bucket found in stack outputs, skipping bucket cleanup"
+            fi
+            
+            echo "🗑️ Deleting CloudFormation stack..."
             aws cloudformation delete-stack \
               --stack-name "${{ needs.validate-inputs.outputs.frontend_stack_name }}" \
               --region "${{ env.AWS_REGION }}"
