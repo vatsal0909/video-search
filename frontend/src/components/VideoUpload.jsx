@@ -1,16 +1,15 @@
 import React, { useState } from 'react';
-import { Upload, CheckCircle, XCircle, Loader2, Video, AlertCircle, FileVideo, UploadCloud } from 'lucide-react';
+import { Upload, CheckCircle, Loader2, FileVideo, AlertCircle } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { upload_to_s3, validate_video_file } from '../utils/s3Upload';
-import { getPresignedUploadUrl } from '../services/api';
+import { getPresignedUploadUrl, completeMultipartUpload } from '../services/api';
 
 const VideoUpload = () => {
   const [file, setFile] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(0);
-  const [uploadStatus, setUploadStatus] = useState('idle'); // idle, uploading, completed, error
+  const [uploadStatus, setUploadStatus] = useState('idle');
   const [s3Url, setS3Url] = useState('');
   const [error, setError] = useState('');
-
 
   const handle_file_select = (e) => {
     const selected_file = e.target.files[0];
@@ -33,22 +32,27 @@ const VideoUpload = () => {
     try {
       setUploadStatus('uploading');
       setError('');
-      
-      console.log('Requesting presigned URL for:', file.name);
-      const presignedData = await getPresignedUploadUrl(file.name);
+      setUploadProgress(0);
 
-      console.log(presignedData)
-      
-      // Upload to S3 using presigned URL
-      const s3_path = await upload_to_s3(file, presignedData, (progress) => {
-        console.log(`Upload progress: ${progress}%`);
-        setUploadProgress(progress)
+      // 1. Get URLs (Backend should detect large files and return multipart info)
+      const presignedData = await getPresignedUploadUrl(file.name, file.size);
+
+      // 2. Perform the upload
+      const result = await upload_to_s3(file, presignedData, (progress) => {
+        setUploadProgress(progress);
       });
 
-      setS3Url(s3_path);
-      console.log('✓ Video uploaded to S3:', s3_path);
-      setUploadStatus('completed');
+      // 3. If Multipart, notify backend to merge parts
+      if (result.type === 'multipart') {
+        await completeMultipartUpload({
+          uploadId: result.uploadId,
+          parts: result.parts,
+          fileName: file.name
+        });
+      }
 
+      setS3Url(result.s3_path);
+      setUploadStatus('completed');
     } catch (err) {
       console.error('Upload error:', err);
       setError(err.message || 'Failed to upload video');
@@ -64,135 +68,80 @@ const VideoUpload = () => {
   };
 
   return (
-    <motion.section
-      initial={{ opacity: 0, y: 50 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -50 }}
-      transition={{ duration: 0.7 }}
-      className="w-full h-full flex flex-col items-center justify-center px-4"
+    <motion.section 
+      initial={{ opacity: 0 }} 
+      animate={{ opacity: 1 }} 
+      className="w-full max-w-4xl mx-auto p-6"
     >
-      {/* Header */}
       <div className="text-center mb-8">
-        <h2 className="text-5xl font-extrabold mb-4 bg-gradient-to-r from-blue-600 to-blue-400 bg-clip-text text-transparent">Share Your Story</h2>
-        <p className="text-blue-600 mb-8 max-w-xl text-center">
-          Upload your best moments. Smooth, fast, and secure.
-        </p>
+        <h2 className="text-4xl font-bold text-gray-800">Video Portal</h2>
+        <p className="text-gray-500">Securely upload videos up to 2GB</p>
       </div>
 
-      {/* Upload Card */}
-      <div className="bg-white rounded-2xl shadow-lg border border-gray-200 p-8 w-full max-w-3xl">
+      <div className="bg-white rounded-3xl shadow-xl p-8 border border-gray-100">
         {uploadStatus === 'idle' || uploadStatus === 'error' ? (
-          <>
-            {/* File Input */}
-            <div className="mb-6">
-              <label
-                htmlFor="video-upload"
-                className="block w-full cursor-pointer"
-              >
-                <div className="border-2 border-dashed border-blue-300 rounded-xl p-16 text-center hover:border-blue-500 hover:bg-blue-50 transition-all duration-200 min-h-[300px] flex flex-col items-center justify-center">
-                  <FileVideo size={64} className="mx-auto text-blue-400 mb-6" />
-                  <p className="text-xl font-semibold text-gray-700 mb-3">
-                    {file ? file.name : 'Click to select video'}
-                  </p>
-                  <p className="text-base text-gray-500">
-                    Acceptable format: MP4 Only (max. 500MB)
-                  </p>
-                </div>
-                <input
-                  id="video-upload"
-                  type="file"
-                  accept="video/mp4"
-                  onChange={handle_file_select}
-                  className="hidden"
-                />
-              </label>
-            </div>
+          <div className="space-y-6">
+            <label className="group relative border-3 border-dashed border-gray-200 rounded-2xl p-12 flex flex-col items-center justify-center cursor-pointer hover:border-blue-400 hover:bg-blue-50/50 transition-all">
+              <FileVideo size={48} className="text-gray-400 group-hover:text-blue-500 mb-4" />
+              <span className="text-lg font-medium text-gray-600">
+                {file ? file.name : "Select your video file"}
+              </span>
+              <span className="text-sm text-gray-400 mt-1">MP4, MOV up to 2GB</span>
+              <input type="file" className="hidden" onChange={handle_file_select} accept="video/*" />
+            </label>
 
-            {/* File Info */}
-            {file && (
-              <div className="mb-6 p-4 bg-gray-50 rounded-lg">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="font-medium text-gray-900">{file.name}</p>
-                    <p className="text-sm text-gray-500">
-                      {(file.size / (1024 * 1024)).toFixed(2)} MB
-                    </p>
-                  </div>
-                  <CheckCircle className="text-green-500" size={24} />
-                </div>
-              </div>
-            )}
-
-            {/* Error Message */}
             {error && (
-              <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
-                <AlertCircle className="text-red-500 flex-shrink-0 mt-0.5" size={20} />
-                <div>
-                  <p className="text-red-700 font-medium">Error</p>
-                  <p className="text-red-600 text-sm">{error}</p>
-                </div>
+              <div className="flex items-center gap-2 p-4 bg-red-50 text-red-700 rounded-xl border border-red-100">
+                <AlertCircle size={20} />
+                <p className="text-sm font-medium">{error}</p>
               </div>
             )}
 
-            {/* Upload Button */}
             <button
               onClick={handle_upload}
               disabled={!file}
-              className="w-full flex items-center justify-center gap-3 px-8 py-5 bg-gradient-to-r from-blue-600 to-blue-500 text-white rounded-xl font-semibold text-lg shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
+              className="w-full py-4 bg-blue-600 text-white rounded-2xl font-bold text-lg hover:bg-blue-700 disabled:bg-gray-200 disabled:cursor-not-allowed transition-all shadow-lg shadow-blue-200"
             >
-              <Upload size={24} />
-              Upload Video to S3
+              Start Upload
             </button>
-          </>
+          </div>
         ) : (
-          <>
-            {/* Upload Progress */}
-            {uploadStatus === 'uploading' && (
-              <div className="space-y-4">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-gray-700 font-medium">Uploading to S3...</span>
-                  <span className="text-primary-600 font-semibold">{uploadProgress}%</span>
+          <div className="py-12 flex flex-col items-center">
+            {uploadStatus === 'uploading' ? (
+              <div className="w-full space-y-6">
+                <div className="flex justify-between items-end">
+                  <div>
+                    <h3 className="text-xl font-bold text-gray-800">Uploading...</h3>
+                    <p className="text-gray-500 text-sm">Processing 2GB stream</p>
+                  </div>
+                  <span className="text-2xl font-black text-blue-600">{uploadProgress}%</span>
                 </div>
-                <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
-                  <div
-                    className="bg-gradient-to-r from-primary-600 to-primary-400 h-full transition-all duration-300 rounded-full"
-                    style={{ width: `${uploadProgress}%` }}
+                <div className="h-4 w-full bg-gray-100 rounded-full overflow-hidden">
+                  <motion.div 
+                    initial={{ width: 0 }}
+                    animate={{ width: `${uploadProgress}%` }}
+                    className="h-full bg-blue-600"
                   />
                 </div>
-                <p className="text-sm text-gray-500 text-center">
-                  Please wait while we upload your video...
-                </p>
               </div>
-            )}
-
-            {/* Completion */}
-            {uploadStatus === 'completed' && (
+            ) : (
               <div className="text-center space-y-4">
-                <div className="inline-flex items-center justify-center w-20 h-20 bg-green-100 rounded-full mb-4">
-                  <CheckCircle size={48} className="text-green-600" />
+                <div className="bg-green-100 p-4 rounded-full inline-block">
+                  <CheckCircle size={40} className="text-green-600" />
                 </div>
-                <h3 className="text-2xl font-bold text-gray-900">
-                  Video Uploaded Successfully!
-                </h3>
-                <p className="text-gray-600">
-                  Your video has been uploaded to S3.
+                <h3 className="text-2xl font-bold text-gray-800">Upload Complete!</h3>
+                <p className="text-sm text-gray-500 break-all bg-gray-50 p-3 rounded-lg border">
+                  Path: {s3Url}
                 </p>
-                <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-                  <p className="text-sm text-blue-700 break-all">
-                    <strong>S3 Path:</strong> {s3Url}
-                  </p>
-                </div>
-                <div className="pt-4 space-y-3">
-                  <button
-                    onClick={reset_form}
-                    className="w-full px-6 py-3 bg-gradient-to-r from-blue-600 to-blue-500 text-white rounded-xl font-semibold hover:shadow-lg transition-all"
-                  >
-                    Upload Another Video
-                  </button>
-                </div>
+                <button 
+                  onClick={reset_form}
+                  className="mt-6 px-8 py-2 border-2 border-blue-600 text-blue-600 rounded-xl font-bold hover:bg-blue-50"
+                >
+                  Upload Another
+                </button>
               </div>
             )}
-          </>
+          </div>
         )}
       </div>
     </motion.section>

@@ -332,12 +332,18 @@ export const listAllVideos = async () => {
   }
 };
 
-export const getPresignedUploadUrl = async (filename) => {
+export const getPresignedUploadUrl = async (filename, fileSize) => {
   try {
     // Load config first
     const backendUrl = await getBackendUrl();
 
-    const response = await fetch(`${backendUrl}/generate-upload-presigned-url?filename=${encodeURIComponent(filename)}`, {
+    // Build query params
+    let queryParams = `filename=${encodeURIComponent(filename)}`;
+    if (fileSize) {
+      queryParams += `&file_size=${fileSize}`;
+    }
+
+    const response = await fetch(`${backendUrl}/generate-upload-presigned-url?${queryParams}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -349,14 +355,72 @@ export const getPresignedUploadUrl = async (filename) => {
     }
     
     const data = await response.json();
-    console.log('Presigned URL generated:', {
-      s3_key: data.s3_key,
-      expires_in: data.expires_in
-    });
+    
+    if (data.type === 'multipart') {
+      console.log('✓ Multipart upload initialized:', {
+        s3_key: data.s3_key,
+        uploadId: data.uploadId,
+        parts_count: data.presigned_urls?.length || 0,
+        chunk_size: data.chunk_size,
+        expires_in: data.expires_in
+      });
+    } else {
+      console.log('✓ Single upload URL generated:', {
+        s3_key: data.s3_key,
+        expires_in: data.expires_in
+      });
+    }
     
     return data;
   } catch (error) {
-    console.error('Error getting presigned upload URL:', error);
+    console.error('❌ Error getting presigned upload URL:', error);
+    throw error;
+  }
+};
+
+export const completeMultipartUpload = async (uploadData) => {
+  try {
+    // Load config first
+    const backendUrl = await getBackendUrl();
+
+    const { uploadId, s3_key, parts } = uploadData;
+
+    if (!uploadId || !s3_key || !parts) {
+      throw new Error('Missing required fields: uploadId, s3_key, parts');
+    }
+
+    console.log('🔄 Completing multipart upload:', {
+      uploadId,
+      s3_key,
+      parts_count: parts.length
+    });
+
+    const response = await fetch(`${backendUrl}/complete-multipart-upload`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        uploadId,
+        s3_key,
+        parts
+      })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(`Failed to complete multipart upload: ${response.status} - ${errorData.detail || ''}`);
+    }
+
+    const data = await response.json();
+    console.log('✓ Multipart upload completed successfully:', {
+      s3_path: data.s3_path,
+      message: data.message
+    });
+
+    return data;
+  } catch (error) {
+    console.error('❌ Error completing multipart upload:', error);
     throw error;
   }
 };

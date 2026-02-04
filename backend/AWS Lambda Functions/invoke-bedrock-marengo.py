@@ -14,7 +14,7 @@ def lambda_handler(event, context):
 
     print(f"Processing {key} in bucket {bucket}")
     
-    dst_bucket = 'condenast-processed-useast1-943143228843-dev'
+    dst_bucket = 'demo-processed-useast1-943143228843-dev'
 
     if MARENGO_MODEL_VERSION == 3:
         modelId = 'twelvelabs.marengo-embed-3-0-v1:0'

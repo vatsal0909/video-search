@@ -1,104 +1,81 @@
-// Presigned URL upload - no AWS SDK needed, uses native fetch API
-
 /**
- * Upload a file to S3 using presigned URL
- * @param {File} file - The file to upload
- * @param {Object} presignedData - Presigned URL data from backend
- * @param {Function} onProgress - Progress callback (percent)
- * @returns {Promise<string>} - The S3 path of the uploaded file
+ * Upload a file to S3 using a streaming chunk approach.
+ * This avoids memory crashes by using file.slice() instead of arrayBuffer().
  */
 export const upload_to_s3 = async (file, presignedData, onProgress) => {
-  const { presigned_url, s3_path } = presignedData;
+  const { presigned_urls, uploadId, s3_path, presigned_url } = presignedData;
 
-  if (!presigned_url) {
-    throw new Error('Presigned URL not provided');
-  }
+  // CASE 1: MULTIPART UPLOAD (Recommended for 2GB)
+  if (presigned_urls && Array.isArray(presigned_urls)) {
+    const CHUNK_SIZE = 10 * 1024 * 1024; // 10MB chunks
+    const totalParts = presigned_urls.length;
+    const partsMetadata = [];
 
-  try {
-    // Convert File to ArrayBuffer
-    const fileBuffer = await file.arrayBuffer();
-    const uint8Array = new Uint8Array(fileBuffer);
+    for (let i = 0; i < totalParts; i++) {
+      const start = i * CHUNK_SIZE;
+      const end = Math.min(start + CHUNK_SIZE, file.size);
+      const chunk = file.slice(start, end); // Does not load into RAM
 
-    // For files smaller than 100MB, use simple PUT
-    const use_simple_upload = file.size < 100 * 1024 * 1024;
-
-    if (use_simple_upload) {
-      // Simple PUT request for smaller files
-      if (onProgress) {
-        onProgress(50); // Show 50% while uploading
-      }
-
-      const response = await fetch(presigned_url, {
+      const response = await fetch(presigned_urls[i], {
         method: 'PUT',
-        body: uint8Array,
-        headers: {
-          'Content-Type': file.type,
-        },
+        body: chunk,
       });
 
-      if (!response.ok) {
-        throw new Error(`S3 upload failed with status ${response.status}`);
-      }
+      if (!response.ok) throw new Error(`Chunk ${i + 1} failed to upload.`);
+
+      // S3 returns an ETag header which is required to complete the upload
+      const etag = response.headers.get('ETag');
+      partsMetadata.push({
+        ETag: etag.replace(/"/g, ''),
+        PartNumber: i + 1,
+      });
 
       if (onProgress) {
-        onProgress(100); // Complete
-      }
-    } else {
-      // Multipart upload for larger files using XMLHttpRequest for progress tracking
-      const chunkSize = 5 * 1024 * 1024; // 5MB chunks
-      const totalChunks = Math.ceil(file.size / chunkSize);
-
-      for (let i = 0; i < totalChunks; i++) {
-        const start = i * chunkSize;
-        const end = Math.min(start + chunkSize, file.size);
-        const chunk = uint8Array.slice(start, end);
-
-        const response = await fetch(presigned_url, {
-          method: 'PUT',
-          body: chunk,
-          headers: {
-            'Content-Type': file.type,
-            'Content-Range': `bytes ${start}-${end - 1}/${file.size}`,
-          },
-        });
-
-        if (!response.ok) {
-          throw new Error(`S3 chunk upload failed at chunk ${i + 1}/${totalChunks}`);
-        }
-
-        // Update progress
-        const progress = Math.round(((i + 1) / totalChunks) * 100);
-        if (onProgress) {
-          onProgress(progress);
-        }
+        onProgress(Math.round(((i + 1) / totalParts) * 100));
       }
     }
 
-    console.log('✓ File uploaded successfully to S3');
-    return s3_path;
-  } catch (error) {
-    console.error('S3 upload error:', error);
-    throw new Error(`Failed to upload to S3: ${error.message}`);
+    return { s3_path, uploadId, parts: partsMetadata, type: 'multipart' };
   }
+
+  // CASE 2: SINGLE PUT UPLOAD (Fallback - may fail on 2GB depending on S3 config)
+  if (presigned_url) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('PUT', presigned_url);
+      xhr.setRequestHeader('Content-Type', file.type);
+
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable && onProgress) {
+          const percent = Math.round((event.loaded / event.total) * 100);
+          onProgress(percent);
+        }
+      };
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve({ s3_path, type: 'single' });
+        } else {
+          reject(new Error(`Upload failed with status ${xhr.status}`));
+        }
+      };
+
+      xhr.onerror = () => reject(new Error('Network error during upload.'));
+      xhr.send(file); // Passing the file object directly streams it from disk
+    });
+  }
+
+  throw new Error('Invalid presigned data received from server.');
 };
 
-/**
- * Validate file before upload
- */
 export const validate_video_file = (file) => {
-  const max_size = 500 * 1024 * 1024; // 500MB
-  const allowed_types = ['video/mp4', 'video/webm', 'video/ogg', 'video/quicktime'];
+  const max_size = 2 * 1024 * 1024 * 1024; // 2GB
+  const allowed_types = ['video/mp4', 'video/webm', 'video/quicktime', 'video/x-matroska'];
 
-  if (!file) {
-    return { valid: false, error: 'No file selected' };
-  }
-
-  if (file.size > max_size) {
-    return { valid: false, error: 'File size exceeds 500MB limit' };
-  }
-
+  if (!file) return { valid: false, error: 'No file selected' };
+  if (file.size > max_size) return { valid: false, error: 'File exceeds 2GB limit' };
   if (!allowed_types.includes(file.type)) {
-    return { valid: false, error: 'Invalid file type. Please upload MP4, WebM, OGG, or MOV' };
+    return { valid: false, error: 'Invalid format. Use MP4, MOV, or WebM' };
   }
 
   return { valid: true };

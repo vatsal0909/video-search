@@ -20,7 +20,7 @@ def lambda_handler(event, context):
     for record in event['Records']:
         bucket = record['s3']['bucket']['name']
         key = unquote_plus(record['s3']['object']['key'])
-        dst_bucket = 'condenast-raw-useast1-943143228843-dev'
+        dst_bucket = 'demo-raw-useast1-943143228843-dev'
         timestamp = str(datetime.now().strftime('%m-%d-%Y_%H-%M-%S'))
         # Only process video files
         if not key.lower().endswith(('.mp4', '.mov', '.avi')):

@@ -1257,7 +1257,7 @@ lambda_handler = Mangum(app)
 # def get_opensearch_client():
 #     """Initialize OpenSearch Cluster client (CHANGED from Serverless)"""
 #     # CHANGE 1: Use cluster endpoint environment variable
-#     opensearch_host = os.environ['OPENSEARCH_CLUSTER_HOST']  # e.g., search-condenast-cluster-xxx.us-east-1.es.amazonaws.com
+#     opensearch_host = os.environ['OPENSEARCH_CLUSTER_HOST']  # e.g., search-demo-cluster-xxx.us-east-1.es.amazonaws.com
 #     opensearch_host = opensearch_host.replace('https://', '').replace('http://', '').strip()
     
 #     # CHANGE 2: Use AWSV4SignerAuth instead of AWS4Auth
