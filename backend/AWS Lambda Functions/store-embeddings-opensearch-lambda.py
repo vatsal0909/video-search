@@ -692,7 +692,7 @@
 # import shutil
 
 # # Configuration
-# THUMBNAIL_BUCKET = os.environ.get('THUMBNAIL_BUCKET', 'condenast-processed-useast1-943143228843-dev')
+# THUMBNAIL_BUCKET = os.environ.get('THUMBNAIL_BUCKET', 'demo-processed-useast1-943143228843-dev')
 # THUMBNAIL_PREFIX = 'thumbnails/'
 # EMBEDDING_DIMENSIONS = 1024
 # INDEX_NAME = 'video_clips_consolidated'
@@ -1192,7 +1192,7 @@ import tempfile
 import shutil
 
 # Configuration
-THUMBNAIL_BUCKET = os.environ.get('THUMBNAIL_BUCKET', 'condenast-processed-useast1-943143228843-dev')
+THUMBNAIL_BUCKET = os.environ.get('THUMBNAIL_BUCKET', 'demo-processed-useast1-943143228843-dev')
 THUMBNAIL_PREFIX = 'thumbnails/'
 EMBEDDING_DIMENSIONS = 512
 INDEX_NAME = 'video_clips_3_lucene'

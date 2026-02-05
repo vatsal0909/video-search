@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: |
-  Condenast Video Search Infrastructure Stack
+  Demo Video Search Infrastructure Stack
 
   IMPORTANT DEPLOYMENT NOTES:
   - OpenSearch domain creation takes 15-20 minutes. Stack will wait for completion.
@@ -1910,7 +1910,7 @@ Resources:
                   service = "es"
                   function = event.get("function", "register-snapshot-repo")
                   domain = os.getenv("OPENSEARCH_CLUSTER_HOST", "").replace("https://", "").replace("http://", "")
-                  repo_name = os.getenv("REPO_NAME", "condenast-snapshot-repo")
+                  repo_name = os.getenv("REPO_NAME", "demo-snapshot-repo")
                   bucket = os.getenv("S3_BUCKET", "aihouse-dist")
                   role_arn = os.getenv("SNAPSHOT_ROLE_ARN")
                   snapshot_name = f"manual-snapshot-{int(time.time())}"

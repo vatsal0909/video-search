@@ -47,8 +47,8 @@ def lambda_handler(event, context):
     Environment variables required:
     - OPENSEARCH_CLUSTER_HOST: OpenSearch domain endpoint
     - SNAPSHOT_ROLE_ARN: IAM role ARN for snapshot permissions
-    - S3_BUCKET: S3 bucket for snapshots (default: condenast-fe)
-    - REPO_NAME: Repository name (default: condenast-snapshot-repo)
+    - S3_BUCKET: S3 bucket for snapshots (default: demo-fe)
+    - REPO_NAME: Repository name (default: demo-snapshot-repo)
     """
     try:
         # ---------- CONFIG ----------
@@ -59,12 +59,12 @@ def lambda_handler(event, context):
 
         domain = os.getenv(
             "OPENSEARCH_CLUSTER_HOST",
-            "https://search-condenast-aos-domain-3hmon7me6ct3p5e46snecxe6f4.us-east-1.es.amazonaws.com"
+            "https://search-demo-aos-domain-3hmon7me6ct3p5e46snecxe6f4.us-east-1.es.amazonaws.com"
         ).replace("https://", "").replace("http://", "")
 
-        repo_name = os.getenv("REPO_NAME", "condenast-snapshot-repo")
-        bucket = os.getenv("S3_BUCKET", "condenast-fe")
-        role_arn = os.getenv("SNAPSHOT_ROLE_ARN", "arn:aws:iam::943143228843:role/condenast-opensearch-snapshot-role")
+        repo_name = os.getenv("REPO_NAME", "demo-snapshot-repo")
+        bucket = os.getenv("S3_BUCKET", "demo-fe")
+        role_arn = os.getenv("SNAPSHOT_ROLE_ARN", "arn:aws:iam::943143228843:role/demo-opensearch-snapshot-role")
         snapshot_name = f"manual-snapshot-{int(time.time())}"
 
         if not domain:

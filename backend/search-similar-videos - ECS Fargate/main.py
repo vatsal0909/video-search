@@ -589,10 +589,11 @@ async def list_all_videos():
 
 
 @app.post("/generate-upload-presigned-url")
-async def generate_upload_url(filename: str):
+async def generate_upload_url(filename: str, file_size: int = None):
     """
-    Generate a presigned URL for direct S3 upload from frontend
-    Frontend uses this URL to upload video directly to S3 without exposing credentials
+    Generate presigned URLs for S3 upload from frontend
+    - For files < 100MB: Single PUT upload
+    - For files >= 100MB: Multipart upload with multiple presigned URLs
     """
     try:
         # Check if s3_client is initialized
@@ -617,28 +618,156 @@ async def generate_upload_url(filename: str):
         if not bucket_name:
             raise ValueError("AWS_S3_BUCKET environment variable not set")
 
-        # Generate presigned URL for PUT operation (15 minutes expiry)
-        # Include ContentType to match the Content-Type header sent by frontend
-        presigned_url = s3_client.generate_presigned_url(
-            "put_object",
-            Params={"Bucket": bucket_name, "Key": s3_key, "ContentType": "video/mp4"},
-            ExpiresIn=900,  # 15 minutes
-        )
+        MULTIPART_THRESHOLD = 100 * 1024 * 1024  # 100MB
+        CHUNK_SIZE = 10 * 1024 * 1024  # 10MB chunks for multipart
+        PRESIGNED_URL_EXPIRY = 3600  # 1 hour for presigned URLs
 
-        logger.info(f"✓ Generated presigned upload URL for: {s3_key}")
+        # CASE 1: SINGLE PUT (files < 100MB)
+        if file_size is None or file_size < MULTIPART_THRESHOLD:
+            logger.info(f"Single PUT upload for: {s3_key} (size: {file_size or 'unknown'})")
+            
+            presigned_url = s3_client.generate_presigned_url(
+                "put_object",
+                Params={"Bucket": bucket_name, "Key": s3_key, "ContentType": "video/mp4"},
+                ExpiresIn=PRESIGNED_URL_EXPIRY,
+            )
 
-        return {
-            "presigned_url": presigned_url,
-            "s3_key": s3_key,
-            "s3_path": f"s3://{bucket_name}/{s3_key}",
-            "expires_in": 900,
-        }
+            logger.info(f"✓ Generated single presigned URL for: {s3_key}")
+            return {
+                "presigned_url": presigned_url,
+                "s3_key": s3_key,
+                "s3_path": f"s3://{bucket_name}/{s3_key}",
+                "expires_in": PRESIGNED_URL_EXPIRY,
+                "type": "single"
+            }
+
+        # CASE 2: MULTIPART UPLOAD (files >= 100MB)
+        else:
+            logger.info(f"Multipart upload for: {s3_key} (size: {file_size / (1024**2):.2f}MB)")
+            
+            # Initiate multipart upload
+            multipart_response = s3_client.create_multipart_upload(
+                Bucket=bucket_name,
+                Key=s3_key,
+                ContentType="video/mp4"
+            )
+            upload_id = multipart_response["UploadId"]
+            logger.info(f"✓ Initiated multipart upload with ID: {upload_id}")
+
+            # Calculate number of parts needed
+            num_parts = math.ceil(file_size / CHUNK_SIZE)
+            logger.info(f"Generating {num_parts} presigned URLs for {num_parts} parts")
+
+            # Generate presigned URLs for each part
+            presigned_urls = []
+            for part_num in range(1, num_parts + 1):
+                presigned_url = s3_client.generate_presigned_url(
+                    "upload_part",
+                    Params={
+                        "Bucket": bucket_name,
+                        "Key": s3_key,
+                        "UploadId": upload_id,
+                        "PartNumber": part_num
+                    },
+                    ExpiresIn=PRESIGNED_URL_EXPIRY,
+                )
+                presigned_urls.append(presigned_url)
+
+            logger.info(f"✓ Generated {len(presigned_urls)} presigned URLs for multipart upload")
+
+            return {
+                "presigned_urls": presigned_urls,
+                "uploadId": upload_id,
+                "s3_key": s3_key,
+                "s3_path": f"s3://{bucket_name}/{s3_key}",
+                "expires_in": PRESIGNED_URL_EXPIRY,
+                "type": "multipart",
+                "chunk_size": CHUNK_SIZE
+            }
 
     except ValueError as e:
         logger.error(f"Configuration error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         logger.error(f"Error generating presigned URL: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class CompleteMultipartRequest(BaseModel):
+    """Request body for completing multipart upload"""
+    uploadId: str
+    s3_key: str
+    parts: List[Dict[str, str]]  # List of {"ETag": "...", "PartNumber": 1}
+
+
+@app.post("/complete-multipart-upload")
+async def complete_multipart_upload(request: CompleteMultipartRequest):
+    """
+    Complete a multipart S3 upload after all parts have been uploaded
+    """
+    try:
+        if s3_client is None:
+            raise HTTPException(
+                status_code=503,
+                detail="S3 client not initialized. Service may still be starting up.",
+            )
+
+        upload_id = request.uploadId
+        s3_key = request.s3_key
+        parts = request.parts
+
+        if not upload_id or not s3_key or not parts:
+            raise HTTPException(
+                status_code=400,
+                detail="uploadId, s3_key, and parts are required"
+            )
+
+        bucket_name = os.environ.get("AWS_S3_BUCKET")
+        if not bucket_name:
+            raise ValueError("AWS_S3_BUCKET environment variable not set")
+
+        logger.info(f"Completing multipart upload for: {s3_key} (uploadId: {upload_id})")
+        logger.info(f"Received {len(parts)} parts to complete")
+
+        # Complete the multipart upload
+        try:
+            response = s3_client.complete_multipart_upload(
+                Bucket=bucket_name,
+                Key=s3_key,
+                UploadId=upload_id,
+                MultipartUpload={"Parts": parts}
+            )
+
+            logger.info(f"✓ Multipart upload completed for: {s3_key}")
+            logger.info(f"  ETag: {response.get('ETag')}")
+            logger.info(f"  Location: {response.get('Location')}")
+
+            return {
+                "success": True,
+                "s3_path": f"s3://{bucket_name}/{s3_key}",
+                "message": f"Multipart upload completed for {s3_key}"
+            }
+
+        except s3_client.exceptions.NoSuchUpload:
+            logger.error(f"Upload ID not found: {upload_id}")
+            raise HTTPException(
+                status_code=404,
+                detail=f"Upload ID {upload_id} not found or has expired"
+            )
+        except Exception as e:
+            logger.error(f"Error completing multipart upload: {str(e)}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to complete multipart upload: {str(e)}"
+            )
+
+    except ValueError as e:
+        logger.error(f"Configuration error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in complete-multipart-upload: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -2437,8 +2566,8 @@ def parse_search_results_vector(response):
 #             {
 #                 'AllowedOrigins': [
 #                     'http://localhost:3000',
-#                     'http://condenast-fe.s3-website-us-east-1.amazonaws.com',
-#                     'https://condenast-fe.s3-website-us-east-1.amazonaws.com'
+#                     'http://demo-fe.s3-website-us-east-1.amazonaws.com',
+#                     'https://demo-fe.s3-website-us-east-1.amazonaws.com'
 #                 ],
 #                 'AllowedMethods': ['PUT', 'POST', 'GET', 'HEAD'],
 #                 'AllowedHeaders': ['*'],
