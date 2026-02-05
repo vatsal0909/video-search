@@ -112,7 +112,7 @@ const VideoUpload = () => {
                 <div className="flex justify-between items-end">
                   <div>
                     <h3 className="text-xl font-bold text-gray-800">Uploading...</h3>
-                    <p className="text-gray-500 text-sm">Processing 2GB stream</p>
+                    <p className="text-gray-500 text-sm">Processing the video file</p>
                   </div>
                   <span className="text-2xl font-black text-blue-600">{uploadProgress}%</span>
                 </div>
